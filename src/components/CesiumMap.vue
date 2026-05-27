@@ -23,11 +23,18 @@
 			:active-tool="activeTool"
 			:icons="icons"
 			:measure-panel-visible="measurePanelVisible"
+			:terrain-active="terrainActive"
+			:terrain-panel-visible="terrainPanelVisible"
+			v-model:terrain-url="terrainInputUrl"
 			v-model:measure-active-tab="measureActiveTab"
 			:measure-form="measureForm"
 			:last-measure="lastMeasure"
 			@start-tool="startTool"
 			@clear-all="clearAllMeasures"
+			@open-terrain-panel="openTerrainPanel"
+			@close-terrain="closeTerrain"
+			@confirm-terrain="confirmTerrain"
+			@cancel-terrain="cancelTerrainPanel"
 			@update:measurePanelVisible="measurePanelVisible = $event"
 			@copy-all="copyAll"
 			@copy-coords="copyCoords"
@@ -143,7 +150,7 @@
 import { onMounted, onBeforeUnmount, ref, reactive, watch, toRaw, computed, nextTick } from 'vue';
 import * as Cesium from 'cesium';
 import { useCesium } from '../composables/useCesium';
-import { ElMessageBox } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 // import { getLandPriceLayers } from '../api/map';
 
 // 导入子组件
@@ -154,6 +161,8 @@ import DataManagement from './map/DataManagement.vue';
 import PersonalCenter from './map/PersonalCenter.vue';
 
 const emit = defineEmits(['logout']);
+const TERRAIN_INPUT_STORAGE_KEY = 'terrainInputUrl';
+const MESSAGE_OFFSET_TOP = 200;
 
 // 工具栏图标
 const icons = {
@@ -202,6 +211,8 @@ const {
 	addCvaLayer,
 	removeVecLayer,
 	removeCvaLayer,
+	enableNetworkTerrain,
+	disableTerrain,
 } = useCesium(containerId);
 
 // 状态管理
@@ -258,9 +269,45 @@ const baseLayerActive = ref('卫星图');
 const showInfoPanel = ref(false);
 const clickInfo = ref({ coordinates: null, properties: {}, feature: null });
 const djcxLoading = ref(false);
+const terrainActive = ref(false);
+const terrainPanelVisible = ref(false);
+const terrainInputUrl = ref(localStorage.getItem(TERRAIN_INPUT_STORAGE_KEY) || '');
+const terrainModelUrls = ref([]);
 let djcxLoadingTimer = null;
 let djcxLoadingToken = 0;
 let djcxMultiSelectedKeys = [];
+
+function normalizeTerrainUrl(url) {
+	return String(url || '').trim();
+}
+
+function parseTerrainUrls(input) {
+	return String(input || '')
+		.split(/[;；]/)
+		.map(normalizeTerrainUrl)
+		.filter(Boolean);
+}
+
+function hasMultipleTerrainLinksWithoutSeparator(input) {
+	const text = String(input || '').trim();
+	if (!text || /[;；]/.test(text)) return false;
+	const protocolCount = (text.match(/https?:\/\//gi) || []).length;
+	return protocolCount > 1;
+}
+
+function getDuplicateTerrainUrls(urls) {
+	const seen = new Set();
+	const duplicates = [];
+	for (const url of Array.isArray(urls) ? urls : []) {
+		if (!url) continue;
+		if (seen.has(url)) {
+			if (!duplicates.includes(url)) duplicates.push(url);
+			continue;
+		}
+		seen.add(url);
+	}
+	return duplicates;
+}
 
 const djcxNodeDataSources = new Map();
 const djcxHighlightedEntities = new Set();
@@ -2441,6 +2488,89 @@ function confirmLogout() {
 		.catch(() => {
 			// 取消退出
 		});
+}
+
+function openTerrainPanel() {
+	terrainInputUrl.value = localStorage.getItem(TERRAIN_INPUT_STORAGE_KEY) || terrainInputUrl.value;
+	terrainPanelVisible.value = true;
+}
+
+function cancelTerrainPanel() {
+	terrainPanelVisible.value = false;
+}
+
+async function confirmTerrain() {
+	const input = terrainInputUrl.value.trim();
+	const previousTerrainModelList = [...terrainModelUrls.value];
+
+	if (hasMultipleTerrainLinksWithoutSeparator(input)) {
+		ElMessage.warning({ message: '检测到多个链接，请使用分号分隔，中英文分号都可以', offset: MESSAGE_OFFSET_TOP });
+		return;
+	}
+
+	const nextTerrainModelList = parseTerrainUrls(input);
+	const duplicateUrls = getDuplicateTerrainUrls(nextTerrainModelList);
+	if (duplicateUrls.length) {
+		ElMessage.warning({ message: `检测到重复链接，请修改后再加载：${duplicateUrls.join('；')}`, offset: MESSAGE_OFFSET_TOP });
+		return;
+	}
+	if (nextTerrainModelList.some((url) => !url.toLowerCase().includes('tileset.json'))) {
+		ElMessage.warning({ message: '请输入有效的 tileset.json 模型地址，多个链接请用分号分隔', offset: MESSAGE_OFFSET_TOP });
+		return;
+	}
+
+	enableNetworkTerrain();
+
+	if (!nextTerrainModelList.length) {
+		if (previousTerrainModelList.length) {
+			previousTerrainModelList.forEach((url) => remove3DTileset(url));
+			terrainModelUrls.value = [];
+		}
+		terrainActive.value = true;
+		terrainPanelVisible.value = false;
+		ElMessage.success({ message: '网络地形加载成功', offset: MESSAGE_OFFSET_TOP });
+		return;
+	}
+
+	const previousTerrainSet = new Set(previousTerrainModelList);
+	const nextTerrainSet = new Set(nextTerrainModelList);
+	const urlsToAdd = nextTerrainModelList.filter((url) => !previousTerrainSet.has(url));
+	const urlsToRemove = previousTerrainModelList.filter((url) => !nextTerrainSet.has(url));
+	if (!urlsToAdd.length && !urlsToRemove.length && previousTerrainModelList.length === nextTerrainModelList.length) {
+		terrainActive.value = true;
+		terrainPanelVisible.value = false;
+		ElMessage.success({ message: '模型已加载成功', offset: MESSAGE_OFFSET_TOP });
+		return;
+	}
+
+	const addedUrls = [];
+	for (const url of urlsToAdd) {
+		const tileset = await add3DTileset(url, { alpha: 1 });
+		if (!tileset) {
+			addedUrls.forEach((loadedUrl) => remove3DTileset(loadedUrl));
+			ElMessage.error({ message: `模型加载失败，请检查链接是否可访问：${url}`, offset: MESSAGE_OFFSET_TOP });
+			return;
+		}
+		addedUrls.push(url);
+	}
+
+	urlsToRemove.forEach((url) => remove3DTileset(url));
+	terrainModelUrls.value = [...nextTerrainModelList];
+	terrainActive.value = true;
+	terrainPanelVisible.value = false;
+	localStorage.setItem(TERRAIN_INPUT_STORAGE_KEY, nextTerrainModelList.join(';'));
+	terrainInputUrl.value = nextTerrainModelList.join(';');
+	ElMessage.success({ message: `地形和模型加载成功，共加载 ${nextTerrainModelList.length} 个链接`, offset: MESSAGE_OFFSET_TOP });
+}
+
+function closeTerrain() {
+	disableTerrain();
+	if (terrainModelUrls.value.length) {
+		terrainModelUrls.value.forEach((url) => remove3DTileset(url));
+		terrainModelUrls.value = [];
+	}
+	terrainActive.value = false;
+	terrainPanelVisible.value = false;
 }
 
 // 处理地图点击

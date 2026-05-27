@@ -43,15 +43,35 @@
 		</button>
 
 		<span style="border-left:1px solid #dadde0;height:24px"></span>
-		<button class="tool-btn" @click="$emit('clear-all')">
+		<button :class="['tool-btn', 'terrain-btn', { active: terrainActive }]" @click="onTerrainButtonClick">
 			<img class="tool-icon" :src="icons.dixing" alt="添加地形" />
-			<span>添加地形</span>
+			<span>{{ terrainActive ? '关闭地形' : '添加地形' }}</span>
 		</button>
 		<span style="border-left:1px solid #dadde0;height:24px"></span>
 		<button class="tool-btn" @click="$emit('clear-all')">
 			<img class="tool-icon" :src="icons.clear" alt="清除" />
 			<span>清除所有</span>
 		</button>
+	</div>
+
+	<div v-if="active && terrainPanelVisible" class="terrain-panel">
+		<div class="terrain-panel-header">
+			<span>添加地形</span>
+			<button class="close-btn" @click="$emit('cancel-terrain')">×</button>
+		</div>
+		<div class="terrain-panel-body">
+			<textarea
+				class="terrain-textarea"
+				:value="terrainUrl"
+				@input="$emit('update:terrainUrl', $event.target.value)"
+				placeholder="请输入一个或多个 tileset.json 地址，多个地址请用分号分隔且不要重复；留空则仅加载网络地形"
+			></textarea>
+			<div class="terrain-tip">请输入一个或多个 tileset.json 地址，多个地址请用分号分隔且不要重复；留空则仅加载网络地形</div>
+		</div>
+		<div class="terrain-panel-footer">
+			<button class="ghost" @click="$emit('cancel-terrain')">取消</button>
+			<button class="primary" @click="$emit('confirm-terrain')">确定</button>
+		</div>
 	</div>
 
 	<!-- 测绘信息面板 -->
@@ -158,9 +178,12 @@ const props = defineProps({
 	measureActiveTab: String,
 	measureForm: Object,
 	lastMeasure: Object,
+	terrainActive: Boolean,
+	terrainPanelVisible: Boolean,
+	terrainUrl: String,
 });
 
-const emit = defineEmits(['start-tool', 'clear-all', 'update:measurePanelVisible', 'update:measureActiveTab', 'copy-all', 'copy-coords', 'delete-current']);
+const emit = defineEmits(['start-tool', 'clear-all', 'update:measurePanelVisible', 'update:measureActiveTab', 'copy-all', 'copy-coords', 'delete-current', 'open-terrain-panel', 'close-terrain', 'confirm-terrain', 'cancel-terrain', 'update:terrainUrl']);
 
 const formattedLength = computed(() => {
 	const m = props.measureForm.lengthMeters;
@@ -211,6 +234,14 @@ const formatMeters = (m) => {
 const emitTool = (type) => {
 	emit('start-tool', type);
 };
+
+const onTerrainButtonClick = () => {
+	if (props.terrainActive) {
+		emit('close-terrain');
+		return;
+	}
+	emit('open-terrain-panel');
+};
 </script>
 
 <style scoped lang="scss">
@@ -260,6 +291,88 @@ const emitTool = (type) => {
 
 .tool-btn span {
 	font-size: 11px;
+}
+
+.terrain-panel {
+	position: absolute;
+	top: 130px;
+	right: 20px;
+	width: 360px;
+	background: #fff;
+	border: 1px solid #e0e3e6;
+	border-radius: 10px;
+	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+	overflow: hidden;
+	z-index: 3;
+}
+
+.terrain-panel-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 12px 14px;
+	background: #f3f5f7;
+	border-bottom: 1px solid #e0e3e6;
+}
+
+.terrain-panel-header span {
+	font-size: 14px;
+	font-weight: 600;
+	color: #1f2937;
+}
+
+.terrain-panel-body {
+	padding: 14px;
+}
+
+.terrain-textarea {
+	width: 100%;
+	height: 120px;
+	padding: 10px 12px;
+	border: 1px solid #d6dbe1;
+	border-radius: 8px;
+	resize: none;
+	box-sizing: border-box;
+	outline: none;
+	font-size: 13px;
+	line-height: 1.5;
+}
+
+.terrain-textarea:focus {
+	border-color: #409eff;
+	box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.12);
+}
+
+.terrain-tip {
+	margin-top: 10px;
+	font-size: 12px;
+	line-height: 1.6;
+	color: #6b7280;
+}
+
+.terrain-panel-footer {
+	display: flex;
+	justify-content: flex-end;
+	gap: 10px;
+	padding: 12px 14px 14px;
+	border-top: 1px solid #eef1f4;
+	background: #fafbfc;
+}
+
+.primary {
+	background: #409eff;
+	border: 1px solid #409eff;
+	height: 30px;
+	border-radius: 6px;
+	padding: 0 14px;
+	cursor: pointer;
+	color: #fff;
+	transition: .2s;
+}
+
+.primary:hover {
+	background: #2f89e7;
+	border-color: #2f89e7;
 }
 
 .measure-panel {

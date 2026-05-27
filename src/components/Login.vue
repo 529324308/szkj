@@ -67,6 +67,7 @@ import { ElMessage } from 'element-plus';
 import { login } from '../api/auth';
 
 const emit = defineEmits(['success']);
+const MESSAGE_OFFSET_TOP = 200;
 const username = ref('');
 const password = ref('');
 const rememberMe = ref(false);
@@ -99,7 +100,7 @@ async function onSubmit() {
   const u = username.value.trim();
   const p = password.value.trim();
   if (!u || !p) {
-    ElMessage.error('请输入用户名和密码');
+    ElMessage.error({ message: '请输入用户名和密码', offset: MESSAGE_OFFSET_TOP });
     return;
   }
   loading.value = true;
@@ -112,11 +113,11 @@ async function onSubmit() {
     localStorage.setItem('expiresIn', data.expiresIn);
     localStorage.setItem('userName', u);
 
-    ElMessage.success('登录成功');
+    ElMessage.success({ message: '登录成功', offset: MESSAGE_OFFSET_TOP });
     emit('success', { username: u, ...data });
   } catch (error) {
     console.error('Login error:', error);
-    ElMessage.error(error.message || '登录失败，请检查用户名或密码');
+    ElMessage.error({ message: error.message || '登录失败，请检查用户名或密码', offset: MESSAGE_OFFSET_TOP });
   } finally {
     loading.value = false;
   }
