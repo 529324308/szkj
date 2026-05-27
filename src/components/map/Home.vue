@@ -44,6 +44,11 @@
 
 		<span style="border-left:1px solid #dadde0;height:24px"></span>
 		<button class="tool-btn" @click="$emit('clear-all')">
+			<img class="tool-icon" :src="icons.dixing" alt="添加地形" />
+			<span>添加地形</span>
+		</button>
+		<span style="border-left:1px solid #dadde0;height:24px"></span>
+		<button class="tool-btn" @click="$emit('clear-all')">
 			<img class="tool-icon" :src="icons.clear" alt="清除" />
 			<span>清除所有</span>
 		</button>

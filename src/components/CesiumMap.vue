@@ -40,6 +40,7 @@
 			:icons="icons"
 			:active-tool="activeTool"
 			:djcx-gongneng="djcxGongneng"
+			:djcx-loading="djcxLoading"
 			v-model:djcx-active-tab="djcxActiveTab"
 			:djcx-tab1="djcxTab1"
 			:djcx-tab2="djcxTab2"
@@ -55,7 +56,6 @@
 			@set-group-items="setGroupItems"
 			@toggle-folder="toggleTab2Folder"
 			@node-features-change="onDjcxNodeFeaturesChange"
-			@click-child-item="clickChildItem"
 			@close-info="closeInfoPanel"
 		/>
 
@@ -179,6 +179,8 @@ const icons = {
 	maximize: new URL('../assets/放大.png', import.meta.url).href,
 	minimize: new URL('../assets/缩小.png', import.meta.url).href,
 	close: new URL('../assets/关闭.png', import.meta.url).href,
+	duodian: new URL('../assets/光标+.png', import.meta.url).href,
+	dixing: new URL('../assets/地形.png', import.meta.url).href,
 };
 
 const containerId = 'cesiumContainer';
@@ -255,17 +257,28 @@ const layerPanelVisible = ref(false);
 const baseLayerActive = ref('卫星图');
 const showInfoPanel = ref(false);
 const clickInfo = ref({ coordinates: null, properties: {}, feature: null });
+const djcxLoading = ref(false);
+let djcxLoadingTimer = null;
+let djcxLoadingToken = 0;
+let djcxMultiSelectedKeys = [];
 
 const djcxNodeDataSources = new Map();
 const djcxHighlightedEntities = new Set();
+const djcxNodeFillAlpha = 0.45;  // 修改透明度
+const djcxNodeOutlineAlpha = 0.95;
+const djcxOutlineColor = Cesium.Color.WHITE.withAlpha(1);
+const djcxOutlineWidth = 1;
+const djcxOutlineHighlightColor = Cesium.Color.fromCssColorString('#45efff').withAlpha(1);
+const djcxOutlineHighlightWidth = 3;
+const djcxLabelMinAreaDeg2 = 1e-7;
 const djcxStyle = {
 	NORMAL: {
 		FILL: Cesium.Color.WHITE.withAlpha(0.08),
-		OUTLINE: Cesium.Color.WHITE.withAlpha(0.9),
+		OUTLINE: djcxOutlineColor,
 	},
 	HIGHLIGHT: {
 		FILL: Cesium.Color.fromCssColorString('#45efff').withAlpha(0.75),
-		OUTLINE: Cesium.Color.fromCssColorString('#45efff'),
+		OUTLINE: djcxOutlineColor,
 	},
 };
 
@@ -320,25 +333,46 @@ function djcxApplyEntityStyle(entity, highlight) {
 	const base = entity._djcxBaseStyle || { FILL: djcxStyle.NORMAL.FILL, OUTLINE: djcxStyle.NORMAL.OUTLINE };
 	const theme = highlight ? djcxStyle.HIGHLIGHT : base;
 	if (entity.polygon) {
-		entity.polygon.material = theme.FILL;
+		entity.polygon.material = base.FILL;
 		entity.polygon.outline = true;
 		entity.polygon.outlineColor = theme.OUTLINE;
-		entity.polygon.outlineWidth = 2;
+		entity.polygon.outlineWidth = djcxOutlineWidth;
 	}
 	if (entity.polyline) {
 		entity.polyline.material = theme.OUTLINE;
+		entity.polyline.width = djcxOutlineWidth;
+	}
+}
+
+function djcxSetOutlineHighlightForEntity(entity, enabled) {
+	const nodeId = String(entity?._djcxNodeId ?? '');
+	if (!nodeId) return;
+	const ds = djcxNodeDataSources.get(nodeId);
+	if (!ds) return;
+	const targetId = entity?.id;
+	if (!targetId) return;
+	for (const e of ds.entities.values) {
+		if (!e?._djcxFeatureOutline) continue;
+		if (e?._djcxForEntityId !== targetId) continue;
+		if (!e.polyline) continue;
+		e.polyline.material = enabled ? djcxOutlineHighlightColor : djcxOutlineColor;
+		e.polyline.width = enabled ? djcxOutlineHighlightWidth : djcxOutlineWidth;
 	}
 }
 
 function djcxClearHighlights() {
-	for (const ent of djcxHighlightedEntities) djcxApplyEntityStyle(ent, false);
+	for (const ent of djcxHighlightedEntities) {
+		djcxSetOutlineHighlightForEntity(ent, false);
+		djcxApplyEntityStyle(ent, false);
+	}
 	djcxHighlightedEntities.clear();
 }
 
 function djcxSetHighlights(entities) {
 	djcxClearHighlights();
 	(entities || []).forEach((ent) => {
-		djcxApplyEntityStyle(ent, true);
+		djcxApplyEntityStyle(ent, false);
+		djcxSetOutlineHighlightForEntity(ent, true);
 		djcxHighlightedEntities.add(ent);
 	});
 }
@@ -355,6 +389,161 @@ function djcxNormalizeRecordsToFeatureCollection(records) {
 		features.push({ type: 'Feature', geometry: raw.geometry, properties: props });
 	});
 	return { type: 'FeatureCollection', features };
+}
+
+function djcxRingSignedArea(ring) {
+	const pts = Array.isArray(ring) ? ring : [];
+	if (pts.length < 3) return 0;
+	let sum = 0;
+	for (let i = 0; i < pts.length - 1; i++) {
+		const a = pts[i];
+		const b = pts[i + 1];
+		if (!a || !b) continue;
+		sum += Number(a[0]) * Number(b[1]) - Number(b[0]) * Number(a[1]);
+	}
+	return sum / 2;
+}
+
+function djcxRingBbox(ring) {
+	const pts = Array.isArray(ring) ? ring : [];
+	let minLon = Infinity, minLat = Infinity, maxLon = -Infinity, maxLat = -Infinity;
+	for (const p of pts) {
+		if (!Array.isArray(p) || p.length < 2) continue;
+		const lon = Number(p[0]);
+		const lat = Number(p[1]);
+		if (!Number.isFinite(lon) || !Number.isFinite(lat)) continue;
+		if (lon < minLon) minLon = lon;
+		if (lon > maxLon) maxLon = lon;
+		if (lat < minLat) minLat = lat;
+		if (lat > maxLat) maxLat = lat;
+	}
+	if (!Number.isFinite(minLon) || !Number.isFinite(minLat) || !Number.isFinite(maxLon) || !Number.isFinite(maxLat)) return null;
+	return { minLon, minLat, maxLon, maxLat };
+}
+
+function djcxRingAreaCentroid(ring) {
+	const pts = Array.isArray(ring) ? ring : [];
+	if (pts.length < 3) return null;
+	let cx = 0, cy = 0;
+	let a2 = 0;
+	for (let i = 0; i < pts.length - 1; i++) {
+		const p0 = pts[i];
+		const p1 = pts[i + 1];
+		if (!Array.isArray(p0) || !Array.isArray(p1) || p0.length < 2 || p1.length < 2) continue;
+		const x0 = Number(p0[0]), y0 = Number(p0[1]);
+		const x1 = Number(p1[0]), y1 = Number(p1[1]);
+		if (!Number.isFinite(x0) || !Number.isFinite(y0) || !Number.isFinite(x1) || !Number.isFinite(y1)) continue;
+		const cross = x0 * y1 - x1 * y0;
+		a2 += cross;
+		cx += (x0 + x1) * cross;
+		cy += (y0 + y1) * cross;
+	}
+	if (!Number.isFinite(a2) || Math.abs(a2) < 1e-12) return null;
+	const area6 = a2 * 3;
+	return { longitude: cx / area6, latitude: cy / area6, height: 0 };
+}
+
+function djcxPointToSegmentDist2(point, a, b) {
+	const px = Number(point[0]), py = Number(point[1]);
+	const ax = Number(a[0]), ay = Number(a[1]);
+	const bx = Number(b[0]), by = Number(b[1]);
+	const abx = bx - ax;
+	const aby = by - ay;
+	const apx = px - ax;
+	const apy = py - ay;
+	const denom = abx * abx + aby * aby;
+	let t = denom > 0 ? (apx * abx + apy * aby) / denom : 0;
+	if (t < 0) t = 0;
+	else if (t > 1) t = 1;
+	const x = ax + t * abx;
+	const y = ay + t * aby;
+	const dx = px - x;
+	const dy = py - y;
+	return dx * dx + dy * dy;
+}
+
+function djcxMinDistToRing2(point, ring) {
+	const pts = Array.isArray(ring) ? ring : [];
+	if (pts.length < 2) return 0;
+	let best = Infinity;
+	for (let i = 0; i < pts.length - 1; i++) {
+		const a = pts[i];
+		const b = pts[i + 1];
+		if (!Array.isArray(a) || !Array.isArray(b) || a.length < 2 || b.length < 2) continue;
+		const d2 = djcxPointToSegmentDist2(point, a, b);
+		if (d2 < best) best = d2;
+	}
+	return Number.isFinite(best) ? best : 0;
+}
+
+function djcxPointInGeometry(point, geometry) {
+	const geom = geometry;
+	if (!geom || !Array.isArray(point) || point.length < 2) return false;
+	if (geom.type === 'Polygon') return djcxPointInPolygon(point, geom.coordinates);
+	if (geom.type === 'MultiPolygon') {
+		const polys = Array.isArray(geom.coordinates) ? geom.coordinates : [];
+		return polys.some(coords => djcxPointInPolygon(point, coords));
+	}
+	return false;
+}
+
+function djcxPickLabelLonLatForPolygon(polygonCoords, avoidGeometries) {
+	const coords = Array.isArray(polygonCoords) ? polygonCoords : null;
+	const ring = coords?.[0];
+	if (!Array.isArray(ring) || ring.length < 3) return null;
+	const bbox = djcxRingBbox(ring);
+	if (!bbox) return null;
+
+	const avoid = Array.isArray(avoidGeometries) ? avoidGeometries : [];
+	const candidates = [];
+	const areaCentroid = djcxRingAreaCentroid(ring);
+	if (areaCentroid) candidates.push([areaCentroid.longitude, areaCentroid.latitude]);
+	candidates.push([(bbox.minLon + bbox.maxLon) / 2, (bbox.minLat + bbox.maxLat) / 2]);
+	const gxCount = 6;
+	const gyCount = 6;
+	const dx = (bbox.maxLon - bbox.minLon) / gxCount;
+	const dy = (bbox.maxLat - bbox.minLat) / gyCount;
+	for (let gy = 0; gy < gyCount; gy++) {
+		for (let gx = 0; gx < gxCount; gx++) {
+			candidates.push([bbox.minLon + (gx + 0.5) * dx, bbox.minLat + (gy + 0.5) * dy]);
+		}
+	}
+
+	const insideSelf = (pt) => djcxPointInPolygon(pt, coords);
+	const insideAvoid = (pt) => avoid.some(g => djcxPointInGeometry(pt, g));
+
+	let best = null;
+	let bestScore = -Infinity;
+
+	for (const pt of candidates) {
+		if (!insideSelf(pt)) continue;
+		if (insideAvoid(pt)) continue;
+		const score = djcxMinDistToRing2(pt, ring);
+		if (score > bestScore) { bestScore = score; best = pt; }
+	}
+
+	if (!best) {
+		for (const pt of candidates) {
+			if (!insideSelf(pt)) continue;
+			const score = djcxMinDistToRing2(pt, ring);
+			if (score > bestScore) { bestScore = score; best = pt; }
+		}
+	}
+
+	return best ? { longitude: best[0], latitude: best[1], height: 0 } : null;
+}
+
+function djcxPickLabelLonLat(entity, allEntities) {
+	const geom = entity?._djcxGeojsonGeometry;
+	const coords = geom?.type === 'Polygon' ? geom.coordinates : (geom?.type === 'MultiPolygon' ? geom.coordinates?.[0] : null);
+	const avoid = (Array.isArray(allEntities) ? allEntities : []).filter((e) => {
+		if (!e || e === entity) return false;
+		if (e._djcxOrder == null || entity?._djcxOrder == null) return true;
+		return String(e._djcxOrder) !== String(entity._djcxOrder);
+	});
+	const avoidGeoms = avoid.map(e => e?._djcxGeojsonGeometry).filter(Boolean);
+	const picked = coords ? djcxPickLabelLonLatForPolygon(coords, avoidGeoms) : null;
+	return picked || djcxEntityCentroidLonLat(entity);
 }
 
 async function djcxAddNodeFeatures(nodeId, records) {
@@ -376,57 +565,103 @@ async function djcxAddNodeFeatures(nodeId, records) {
 		ent._djcxProperties = ent.properties ? ent.properties.getValue(now) : {};
 		ent._djcxCentroid = null;
 		ent._djcxGeojsonGeometry = null;
-		const hierarchy = ent.polygon?.hierarchy?.getValue(now);
-		const pts = hierarchy?.positions || [];
-		if (Array.isArray(pts) && pts.length >= 3) {
-			const ring = pts.map((p) => {
-				const c = Cesium.Cartographic.fromCartesian(p);
-				return [Cesium.Math.toDegrees(c.longitude), Cesium.Math.toDegrees(c.latitude)];
-			});
-			const first = ring[0];
-			const last = ring[ring.length - 1];
-			if (first && last && (first[0] !== last[0] || first[1] !== last[1])) ring.push([...first]);
-			ent._djcxGeojsonGeometry = { type: 'Polygon', coordinates: [ring] };
+		const rawIndex = Number(ent._djcxProperties?.__djcxIndex);
+		const featureGeom = Number.isFinite(rawIndex) && rawIndex > 0 ? featureCollection.features?.[rawIndex - 1]?.geometry : null;
+		if (featureGeom && (featureGeom.type === 'Polygon' || featureGeom.type === 'MultiPolygon')) {
+			ent._djcxGeojsonGeometry = featureGeom;
+		} else {
+			const hierarchy = ent.polygon?.hierarchy?.getValue(now);
+			const pts = hierarchy?.positions || [];
+			if (Array.isArray(pts) && pts.length >= 3) {
+				const ring = pts.map((p) => {
+					const c = Cesium.Cartographic.fromCartesian(p);
+					return [Cesium.Math.toDegrees(c.longitude), Cesium.Math.toDegrees(c.latitude)];
+				});
+				const first = ring[0];
+				const last = ring[ring.length - 1];
+				if (first && last && (first[0] !== last[0] || first[1] !== last[1])) ring.push([...first]);
+				ent._djcxGeojsonGeometry = { type: 'Polygon', coordinates: [ring] };
+			}
 		}
 
-		const rawIndex = Number(ent._djcxProperties?.__djcxIndex);
 		const order = Number.isFinite(rawIndex) && rawIndex > 0 ? Math.min(total, Math.max(1, rawIndex)) : 1;
 		ent._djcxOrder = order;
 		ent._djcxRoman = djcxToRoman(order);
 		const baseColor = djcxColorForIndex(order, total);
 		ent._djcxBaseStyle = {
-			FILL: baseColor.withAlpha(0.18),
-			OUTLINE: baseColor.withAlpha(0.95),
+			FILL: baseColor.withAlpha(djcxNodeFillAlpha),
+			OUTLINE: djcxOutlineColor,
 		};
 		djcxApplyEntityStyle(ent, false);
+
+		if (ent.polygon) {
+			const hierarchy = ent.polygon?.hierarchy?.getValue(now);
+			const pts = hierarchy?.positions || [];
+			if (Array.isArray(pts) && pts.length >= 2) {
+				const outlinePositions = pts.slice();
+				outlinePositions.push(pts[0]);
+				const outlineEntity = ds.entities.add({
+					polyline: {
+						positions: outlinePositions,
+						clampToGround: true,
+						width: djcxOutlineWidth,
+						material: djcxOutlineColor,
+						zIndex: 10,
+						disableDepthTestDistance: Number.POSITIVE_INFINITY,
+					}
+				});
+				outlineEntity._djcxFeatureOutline = true;
+				outlineEntity._djcxNodeId = String(nodeId);
+				outlineEntity._djcxForEntityId = ent.id;
+			}
+		}
 	}
 
-	const labeled = new Set();
+	const skipRomanLabel = ['26', '27'].includes(String(nodeId));
+	if (skipRomanLabel) {
+		djcxNodeDataSources.set(String(nodeId), ds);
+		return;
+	}
+
 	for (const ent of baseEntities) {
-		if (labeled.has(ent._djcxOrder)) continue;
-		const centroid = djcxEntityCentroidLonLat(ent);
-		if (!centroid) continue;
-		labeled.add(ent._djcxOrder);
-		const baseColor = djcxColorForIndex(ent._djcxOrder, total);
-		const labelEntity = ds.entities.add({
-			position: Cesium.Cartesian3.fromDegrees(centroid.longitude, centroid.latitude, 0),
-			label: {
-				text: ent._djcxRoman || '',
-				font: 'bold 18px Microsoft YaHei',
-				fillColor: baseColor,
-				outlineColor: Cesium.Color.BLACK,
-				outlineWidth: 3,
-				style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-				disableDepthTestDistance: Number.POSITIVE_INFINITY,
-				showBackground: true,
-				backgroundColor: new Cesium.Color(0.05, 0.06, 0.08, 0.55),
-				pixelOffset: new Cesium.Cartesian2(0, -10),
-				heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
-			}
-		});
-		labelEntity._djcxFeatureLabel = true;
-		labelEntity._djcxNodeId = String(nodeId);
-		labelEntity._djcxForEntityId = ent.id;
+		if (!ent?.polygon) continue;
+		const geom = ent?._djcxGeojsonGeometry;
+		const polygons = geom?.type === 'Polygon' ? [geom.coordinates] : (geom?.type === 'MultiPolygon' ? geom.coordinates : []);
+		if (!Array.isArray(polygons) || !polygons.length) continue;
+
+		const avoidGeoms = baseEntities
+			.filter(e => e && e !== ent && String(e?._djcxOrder) !== String(ent?._djcxOrder))
+			.map(e => e?._djcxGeojsonGeometry)
+			.filter(Boolean);
+
+		for (let i = 0; i < polygons.length; i++) {
+			const polyCoords = polygons[i];
+			const areaDeg2 = Math.abs(djcxRingSignedArea(polyCoords?.[0] || []));
+			if (!Number.isFinite(areaDeg2) || areaDeg2 < djcxLabelMinAreaDeg2) continue;
+			const labelPos = djcxPickLabelLonLatForPolygon(polyCoords, avoidGeoms) || djcxPickLabelLonLat(ent, baseEntities);
+			if (!labelPos) continue;
+			const baseColor = djcxColorForIndex(ent._djcxOrder, total);
+			const labelEntity = ds.entities.add({
+				position: Cesium.Cartesian3.fromDegrees(labelPos.longitude, labelPos.latitude, 0),
+				label: {
+					text: ent._djcxRoman || '',
+					font: 'bold 18px Microsoft YaHei',
+					fillColor: baseColor,
+					outlineColor: Cesium.Color.BLACK,
+					outlineWidth: 3,
+					style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+					disableDepthTestDistance: Number.POSITIVE_INFINITY,
+					showBackground: true,
+					backgroundColor: new Cesium.Color(0.05, 0.06, 0.08, 0.55),
+					pixelOffset: new Cesium.Cartesian2(0, -10),
+					heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+				}
+			});
+			labelEntity._djcxFeatureLabel = true;
+			labelEntity._djcxNodeId = String(nodeId);
+			labelEntity._djcxForEntityId = ent.id;
+			labelEntity._djcxForPolygonIndex = i;
+		}
 	}
 	djcxNodeDataSources.set(String(nodeId), ds);
 }
@@ -440,6 +675,11 @@ function djcxRemoveNodeFeatures(nodeId) {
 	if (!ds) return;
 	try { viewer.dataSources.remove(ds, true); } catch { /* ignore */ }
 	djcxNodeDataSources.delete(key);
+	if (Array.isArray(djcxMultiSelectedKeys) && djcxMultiSelectedKeys.length) {
+		const all = djcxGetAllFeatureEntities();
+		const removedKeys = new Set(all.filter(e => String(e?._djcxNodeId) === key).map(djcxFeatureKey));
+		djcxMultiSelectedKeys = djcxMultiSelectedKeys.filter(k => !removedKeys.has(String(k)));
+	}
 }
 
 function djcxPointInRing(point, ring) {
@@ -492,10 +732,155 @@ function djcxGetAllFeatureEntities() {
 	return out;
 }
 
+function djcxFeatureKey(entity) {
+	const p = entity?._djcxProperties || {};
+	const key = p.id ?? p.fid ?? p.DKBH ?? p.OBJECTID ?? entity?.id;
+	return String(key ?? '');
+}
+
+function djcxGroupEntitiesByFeatureKey(entities) {
+	const list = Array.isArray(entities) ? entities.filter(Boolean) : [];
+	const map = new Map();
+	list.forEach((ent) => {
+		const k = djcxFeatureKey(ent);
+		if (!k) return;
+		const g = map.get(k);
+		if (g) g.entities.push(ent);
+		else map.set(k, { key: k, entities: [ent], rep: ent });
+	});
+	return map;
+}
+
+function djcxGetProp(props, keys) {
+	const p = props && typeof props === 'object' ? props : {};
+	const lower = {};
+	Object.keys(p).forEach((k) => {
+		if (typeof k !== 'string') return;
+		lower[k.toLowerCase()] = p[k];
+	});
+	const list = Array.isArray(keys) ? keys : [keys];
+	for (const k of list) {
+		if (k == null) continue;
+		if (typeof k === 'string') {
+			if (p[k] != null && p[k] !== '') return p[k];
+			const v = lower[k.toLowerCase()];
+			if (v != null && v !== '') return v;
+		}
+	}
+	return undefined;
+}
+
+function djcxFormatPercent(value) {
+	if (value == null || value === '') return value;
+	if (typeof value === 'string') {
+		const s = value.trim();
+		if (!s) return value;
+		if (s.includes('%')) return s;
+		const n = Number(s);
+		if (!Number.isFinite(n)) return s;
+		if (n <= 1) return `${(n * 100).toFixed(0)}%`;
+		if (n <= 100) return `${n}%`;
+		return s;
+	}
+	const n = Number(value);
+	if (!Number.isFinite(n)) return value;
+	if (n <= 1) return `${(n * 100).toFixed(0)}%`;
+	if (n <= 100) return `${n}%`;
+	return value;
+}
+
+function djcxFormatYears(value) {
+	if (value == null || value === '') return value;
+	if (typeof value === 'string') {
+		const s = value.trim();
+		if (!s) return value;
+		return s.includes('年') ? s : `${s}年`;
+	}
+	const n = Number(value);
+	if (!Number.isFinite(n)) return value;
+	return `${n}年`;
+}
+
+function djcxFormatDate(value) {
+	if (value == null || value === '') return value;
+	if (typeof value === 'string') {
+		const s = value.trim();
+		if (!s) return value;
+		if (/^\d{4}-\d{1,2}-\d{1,2}$/.test(s)) return s;
+		const m = s.match(/^(\d{4}-\d{2}-\d{2})/);
+		if (m) return m[1];
+		const d = new Date(s);
+		if (!Number.isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+		return s;
+	}
+	const d = new Date(value);
+	if (!Number.isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+	return value;
+}
+
 function djcxBuildQueryResultProperties(entity, matchCount) {
 	const props = entity?._djcxProperties || {};
-	const base = entity?._djcxRoman ? { 序号: entity._djcxRoman, ...props } : props;
-	return matchCount != null ? { ...base, 匹配数量: matchCount } : base;
+	const out = {};
+	if (entity?._djcxRoman) out.序号 = entity._djcxRoman;
+
+	const nodeId = String(entity?._djcxNodeId ?? '');
+	const isNode26Or27 = nodeId === '26' || nodeId === '27';
+	const fields = isNode26Or27
+		? [
+			{ label: '地块编号', keys: ['地块编号', 'DKBH', 'dkbh'] },
+			{ label: '项目名称', keys: ['项目名称', 'XMMC', 'xmmc'] },
+			{ label: '年份', keys: ['年份', 'NF', 'nf', 'YEAR', 'year', 'ND', 'nd', '年度'] },
+			{ label: '土地坐落', keys: ['土地坐落', 'TDZL', 'tdzl', 'ZL', 'zl'] },
+			{ label: '供应方式', keys: ['供应方式', 'GYFS', 'gyfs'] },
+			{ label: '用地批准时间', keys: ['用地批准时间', 'YDPZRQ', 'ydpzrq', 'PZRQ', 'pzrq'] },
+			{ label: '批准文号', keys: ['批准文号', 'PZWH', 'pzwh'] },
+			{ label: '合同取得日期', keys: ['合同取得日期', 'HTQDRQ', 'htqdrq', 'HTRQ', 'htrq'] },
+			{ label: '行业分类', keys: ['行业分类', 'HYFL', 'hyfl'] },
+			{ label: '土地用途', keys: ['土地用途', 'TDYT', 'tdyt', '用途'] },
+			{ label: '供应总面积', keys: ['供应总面积', 'GDZMJ', 'gdzmj', 'ZMJ', 'zmj', 'Shape_Area', 'shape_area'] },
+			{ label: '使用权人', keys: ['使用权人', 'SYQR', 'syqr'] },
+			{ label: '单位面积地价', keys: ['单位面积地价', 'DWMJDJ', 'dwmjdj'] },
+			{ label: '楼面价', keys: ['楼面价', 'LMJ', 'lmj', '楼面地价', 'LMDJ', 'lmdj'] },
+			{ label: '成交价', keys: ['成交价', 'CJJ', 'cjj', 'CJJE', 'cjje'] },
+			{ label: '评估报告编号', keys: ['评估报告编号', 'PGBBH', 'pgbbh', 'PGBH', 'pgbh'] },
+			{ label: '评估时间', keys: ['评估时间', 'PGSJ', 'pgsj'] },
+			{ label: '出让年限', keys: ['出让年限', 'CRNX', 'crnx', 'SYNX', 'synx'] },
+			{ label: '容积率', keys: ['容积率', 'RJL', 'rjl', 'FAR', 'far'] },
+			{ label: '最大容积率', keys: ['最大容积率', 'ZDRJL', 'zdrjl', 'MAXRJL', 'maxrjl'] },
+			{ label: '建筑密度', keys: ['建筑密度', 'JZMD', 'jzmd', 'BUILD_DENS', 'build_dens', 'BUILDING_DENSITY'] },
+		]
+		: [
+			{ label: '行政区代码', keys: ['行政区代码', 'XZQDM', 'xzqdm', 'ADCODE', 'adcode', '行政区划代码', 'XZQ_CODE', 'xzq_code'] },
+			{ label: '行政区名称', keys: ['行政区名称', 'XZQMC', 'xzqmc', 'NAME', 'name', '行政区划名称', 'XZQ_NAME', 'xzq_name'] },
+			{ label: '年份', keys: ['年份', 'YEAR', 'year', 'ND', 'nd', '年度'] },
+			{ label: '地价体系', keys: ['地价体系', 'DJTX', 'djtx', 'PRICE_SYSTEM', 'price_system'] },
+			{ label: '土地用途', keys: ['土地用途', 'TDYT', 'tdyt', 'LAND_USE', 'land_use', '用途'] },
+			{ label: '土地级别', keys: ['土地级别', 'TDJB', 'tdjb', 'LEVEL', 'level', '级别'] },
+			{ label: '级别价', keys: ['级别价', 'JBJ', 'jbj', 'LEVEL_PRICE', 'level_price', 'JIBIEJIA'] },
+			{ label: '楼面地价', keys: ['楼面地价', 'LMDJ', 'lmdj', 'FLOOR_PRICE', 'floor_price'] },
+			{ label: '亩地均价', keys: ['亩地均价', 'MDJJ', 'mdjj', 'MU_AVG_PRICE', 'mu_avg_price'] },
+			{ label: '容积率', keys: ['容积率', 'RJL', 'rjl', 'FAR', 'far'] },
+			{ label: '建筑密度', keys: ['建筑密度', 'JZMD', 'jzmd', 'BUILD_DENS', 'build_dens', 'BUILDING_DENSITY'] },
+			{ label: '土地使用年限', keys: ['土地使用年限', 'TDNX', 'tdnx', 'SYNX', 'synx', 'USE_YEARS', 'use_years'] },
+			{ label: '土地开发程度', keys: ['土地开发程度', 'TDKFCD', 'tdkfcd', 'DEVELOP_LEVEL', 'develop_level'] },
+			{ label: '估计期日', keys: ['估计期日', 'GJQR', 'gjqr', 'GJQD', 'gjqd', 'DATE', 'date', '估价期日'] },
+		];
+
+	let hit = false;
+	for (const f of fields) {
+		let v = djcxGetProp(props, f.keys);
+		if (v == null || v === '') continue;
+		if (f.label === '建筑密度') v = djcxFormatPercent(v);
+		if (f.label === '土地使用年限' || f.label === '出让年限') v = djcxFormatYears(v);
+		if (f.label === '用地批准时间' || f.label === '合同取得日期' || f.label === '评估时间' || f.label === '估计期日') v = djcxFormatDate(v);
+		out[f.label] = v;
+		hit = true;
+	}
+
+	if (matchCount != null) out.匹配数量 = matchCount;
+
+	if (hit || out.序号 || matchCount != null) return out;
+	return props;
 }
 
 function djcxShowFeatureInPanel(entity, matchCount) {
@@ -507,6 +892,75 @@ function djcxShowFeatureInPanel(entity, matchCount) {
 	};
 	showInfoPanel.value = true;
 	measurePanelVisible.value = false;
+}
+
+function djcxShowFeaturesInTable(entities, options = {}) {
+	const list = Array.isArray(entities) ? entities.filter(Boolean) : [];
+	if (!list.length) return;
+	const items = list.map((ent) => ({ ent, props: djcxBuildQueryResultProperties(ent) || {} }));
+	const rawNames = items.map((it, idx) => {
+		const p = it.props || {};
+		return String(p.地块编号 || p.序号 || p.项目名称 || `要素${idx + 1}`);
+	});
+	const nameCount = new Map();
+	const colNames = rawNames.map((n) => {
+		const k = String(n || '要素');
+		const c = (nameCount.get(k) || 0) + 1;
+		nameCount.set(k, c);
+		return c === 1 ? k : `${k}-${c}`;
+	});
+
+	const fieldKeys = [];
+	const seenKeys = new Set();
+	items.forEach((it) => {
+		const p = it.props || {};
+		Object.keys(p).forEach((k) => {
+			if (!k || k === '匹配数量' || seenKeys.has(k)) return;
+			seenKeys.add(k);
+			fieldKeys.push(k);
+		});
+	});
+
+	const cols = ['字段', ...colNames];
+	const rows = fieldKeys.map((k) => {
+		const row = { 字段: k };
+		items.forEach((it, idx) => { row[colNames[idx]] = it.props?.[k]; });
+		return row;
+	});
+	const withLoading = options?.withLoading !== false;
+	if (!withLoading) {
+		if (djcxLoadingTimer) { clearTimeout(djcxLoadingTimer); djcxLoadingTimer = null; }
+		djcxLoadingToken += 1;
+		djcxLoading.value = false;
+		clickInfo.value = {
+			coordinates: null,
+			properties: {},
+			table: { columns: cols, rows },
+			feature: null,
+		};
+		showInfoPanel.value = true;
+		measurePanelVisible.value = false;
+		return;
+	}
+
+	if (djcxLoadingTimer) { clearTimeout(djcxLoadingTimer); djcxLoadingTimer = null; }
+	djcxLoadingToken += 1;
+	const token = djcxLoadingToken;
+	showInfoPanel.value = false;
+	djcxLoading.value = true;
+	measurePanelVisible.value = false;
+	djcxLoadingTimer = setTimeout(() => {
+		if (token !== djcxLoadingToken) return;
+		djcxLoading.value = false;
+		clickInfo.value = {
+			coordinates: null,
+			properties: {},
+			table: { columns: cols, rows },
+			feature: null,
+		};
+		showInfoPanel.value = true;
+		djcxLoadingTimer = null;
+	}, 1500);
 }
 
 function djcxQueryPoint(lon, lat) {
@@ -590,7 +1044,7 @@ watch(activeTopTab, async (newVal) => {
 	if (newVal === 'djcx') {
 		djcxGongneng.value = true;
 	} else {
-		listItem.value = -1;
+		// listItem.value = -1;
 		djcxGongneng.value = false;
 	}
 
@@ -624,22 +1078,26 @@ watch(activeTopTab, async (newVal) => {
 		}
 	}
 
+	if (newVal === 'djcx') {
+		startTool('dianxuan');
+	}
+
 	await nextTick();
 	updateIndicator();
 });
 
-async function clickChildItem(item, index) {
-	childItem.value = index;
-	await add3DTileset(item.url, { alpha: 0.7 });
-}
-watch(() => listItem.value, (newVal, oldVal) => {
-	if (oldVal === -1 || newVal === oldVal) return;
-	const oldUrl = list.value[oldVal].childList.length === 0 ? list.value[oldVal].url : list.value[oldVal].childList[childItem.value].url;
-	remove3DTileset(oldUrl);
-});
-watch(() => childItem.value, (newVal, oldVal) => {
-	if (newVal !== oldVal) remove3DTileset(list.value[listItem.value].childList[oldVal].url);
-});
+// async function clickChildItem(item, index) {
+// 	childItem.value = index;
+// 	await add3DTileset(item.url, { alpha: 0.7 });
+// }
+// watch(() => listItem.value, (newVal, oldVal) => {
+// 	if (oldVal === -1 || newVal === oldVal) return;
+// 	// const oldUrl = list.value[oldVal].childList.length === 0 ? list.value[oldVal].url : list.value[oldVal].childList[childItem.value].url;
+// 	remove3DTileset(oldUrl);
+// });
+// watch(() => childItem.value, (newVal, oldVal) => {
+// 	if (newVal !== oldVal) remove3DTileset(list.value[listItem.value].childList[oldVal].url);
+// });
 function setGroupItems(groupKey, checked) {
 	const group = djcxTab1[groupKey];
 	if (!group || !group.items) return;
@@ -741,6 +1199,11 @@ function resetDrawing() {
 	const viewer = getViewer();
 	if (!viewer) return;
 	
+	if (djcxLoadingTimer) { clearTimeout(djcxLoadingTimer); djcxLoadingTimer = null; }
+	djcxLoadingToken += 1;
+	djcxLoading.value = false;
+	djcxMultiSelectedKeys = [];
+
 	djcxClearHighlights();
 	const djcxQueries = [...viewer.entities.values].filter(e => e && e._djcxQuery);
 	djcxQueries.forEach(e => viewer.entities.remove(e));
@@ -806,8 +1269,47 @@ function startTool(type) {
 			const lon = Cesium.Math.toDegrees(carto.longitude);
 			const lat = Cesium.Math.toDegrees(carto.latitude);
 			const results = djcxQueryPoint(lon, lat);
-			djcxSetHighlights(results);
-			if (results.length) djcxShowFeatureInPanel(results[0], results.length);
+			const grouped = djcxGroupEntitiesByFeatureKey(results);
+			const keys = [...grouped.keys()];
+			const allEntities = keys.flatMap(k => grouped.get(k)?.entities || []);
+			const reps = keys.map(k => grouped.get(k)?.rep).filter(Boolean);
+			djcxSetHighlights(allEntities);
+			if (keys.length === 1) djcxShowFeatureInPanel(reps[0], 1);
+			else if (keys.length > 1) djcxShowFeaturesInTable(reps, { withLoading: false });
+			else showInfoPanel.value = false;
+		}, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+		return;
+	}
+	if (type === 'duodian') {
+		djcxMultiSelectedKeys = [];
+		drawHandler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+		drawHandler.setInputAction((click) => {
+			const cartesian = viewer.camera.pickEllipsoid(click.position, viewer.scene.globe.ellipsoid);
+			if (!cartesian) return;
+			const carto = Cesium.Cartographic.fromCartesian(cartesian);
+			const lon = Cesium.Math.toDegrees(carto.longitude);
+			const lat = Cesium.Math.toDegrees(carto.latitude);
+			const results = djcxQueryPoint(lon, lat);
+			if (!results.length) return;
+			const pickKey = djcxFeatureKey(results[0]);
+			if (!pickKey) return;
+			const idx = djcxMultiSelectedKeys.findIndex(k => String(k) === pickKey);
+			if (idx >= 0) djcxMultiSelectedKeys.splice(idx, 1);
+			else djcxMultiSelectedKeys.push(pickKey);
+
+			const all = djcxGetAllFeatureEntities();
+			const selectedEntities = [];
+			const reps = [];
+			djcxMultiSelectedKeys.forEach((k) => {
+				const ents = all.filter(e => djcxFeatureKey(e) === String(k));
+				if (!ents.length) return;
+				selectedEntities.push(...ents);
+				reps.push(ents[0]);
+			});
+
+			djcxSetHighlights(selectedEntities);
+			if (reps.length === 1) djcxShowFeatureInPanel(reps[0], 1);
+			else if (reps.length > 1) djcxShowFeaturesInTable(reps, { withLoading: false });
 			else showInfoPanel.value = false;
 		}, Cesium.ScreenSpaceEventType.LEFT_CLICK);
 		return;
@@ -914,6 +1416,7 @@ function startTool(type) {
 					disableDepthTestDistance: Number.POSITIVE_INFINITY
 				}
 			});
+			if (['dianPolygon', 'dianRect', 'dianCircle'].includes(type)) pt._djcxQuery = true;
 			currentMeasurePoints.push(pt);
 			
 			// 更新提示文字
@@ -934,7 +1437,7 @@ function startTool(type) {
 			}
 			
 			// 矩形和圆点击两次即完成，方位角2次，夹角3次
-			if (['drawRect', 'drawCircle', 'measureAzimuth'].includes(type) && positions.length >= 2) {
+			if (['drawRect', 'drawCircle', 'dianRect', 'dianCircle', 'measureAzimuth'].includes(type) && positions.length >= 2) {
 				finalizeDrawing();
 			} else if (type === 'measureAngle' && positions.length >= 3) {
 				finalizeDrawing();
@@ -943,13 +1446,20 @@ function startTool(type) {
 	}, Cesium.ScreenSpaceEventType.LEFT_CLICK);
 
 	drawHandler.setInputAction(() => {
-		if (positions.length >= 2) finalizeDrawing();
+		if (['drawLine', 'measureDistance'].includes(type) && positions.length >= 2) {
+			finalizeDrawing();
+			return;
+		}
+		if (['drawPolygon', 'measureArea', 'measureVolume', 'dianPolygon'].includes(type) && positions.length >= 3) {
+			finalizeDrawing();
+		}
 	}, Cesium.ScreenSpaceEventType.RIGHT_CLICK);
 }
 
 function updateDrawingHint(type, pointCount) {
 	const hints = {
 		dianxuan: ['点击地图查询要素', '点击地图查询要素'],
+		duodian: ['点击地图选择多个要素', '继续点击选择/取消选择'],
 		dianPolygon: ['点击地图开始框选查询', '点击增加点，右键结束查询'],
 		dianCircle: ['点击选择圆心', '移动鼠标调整半径，再次点击查询'],
 		dianRect: ['点击选择起点', '移动鼠标调整范围，再次点击查询'],
@@ -1009,6 +1519,12 @@ const angleDeg = (a, b, c) => {
 function createTempEntity(viewer, type) {
 	const CesiumLib = Cesium;
 	const cyanColor = CesiumLib.Color.fromCssColorString('#45efff');
+	const queryMainColor = CesiumLib.Color.fromCssColorString('#334155');
+	const queryDashColor = CesiumLib.Color.BLACK.withAlpha(1);
+	const isQueryTool = type === 'dianPolygon' || type === 'dianRect' || type === 'dianCircle';
+	const mainColor = isQueryTool ? queryMainColor : cyanColor;
+	const fillAlpha = isQueryTool ? 0.5 : 0.3;
+	const dashColor = isQueryTool ? queryDashColor : cyanColor;
 	
 	switch (type) {
 		case 'drawLine':
@@ -1020,7 +1536,7 @@ function createTempEntity(viewer, type) {
 						return [positions[positions.length - 1], hoverCartesian];
 					}, false),
 					width: 2,
-					material: new CesiumLib.PolylineDashMaterialProperty({ color: cyanColor, dashLength: 16 }),
+					material: new CesiumLib.PolylineDashMaterialProperty({ color: dashColor, dashLength: 16 }),
 				}
 			});
 			tempDistanceLabel = viewer.entities.add({
@@ -1054,9 +1570,9 @@ function createTempEntity(viewer, type) {
 						if (!hoverCartesian) return new CesiumLib.PolygonHierarchy(positions);
 						return new CesiumLib.PolygonHierarchy([...positions, hoverCartesian]);
 					}, false),
-					material: cyanColor.withAlpha(0.3),
+					material: mainColor.withAlpha(fillAlpha),
 					outline: true,
-					outlineColor: cyanColor,
+					outlineColor: mainColor,
 					outlineWidth: 2
 				}
 			});
@@ -1067,7 +1583,7 @@ function createTempEntity(viewer, type) {
 						return [positions[positions.length - 1], hoverCartesian, positions[0]];
 					}, false),
 					width: 2,
-					material: new CesiumLib.PolylineDashMaterialProperty({ color: cyanColor, dashLength: 16 })
+					material: new CesiumLib.PolylineDashMaterialProperty({ color: dashColor, dashLength: 16 })
 				}
 			});
 			tempAreaLabel = viewer.entities.add({
@@ -1113,12 +1629,36 @@ function createTempEntity(viewer, type) {
 							Math.max(c1.latitude, c2.latitude)
 						);
 					}, false),
-					material: cyanColor.withAlpha(0.3),
+					material: mainColor.withAlpha(fillAlpha),
 					outline: true,
-					outlineColor: cyanColor,
+					outlineColor: mainColor,
 					outlineWidth: 2
 				}
 			});
+			if (type === 'dianRect') {
+				tempEdgeEntity = viewer.entities.add({
+					polyline: {
+						positions: new CesiumLib.CallbackProperty(() => {
+							if (!hoverCartesian || positions.length === 0) return [];
+							const c1 = CesiumLib.Cartographic.fromCartesian(positions[0]);
+							const c2 = CesiumLib.Cartographic.fromCartesian(hoverCartesian);
+							const west = Math.min(c1.longitude, c2.longitude);
+							const east = Math.max(c1.longitude, c2.longitude);
+							const south = Math.min(c1.latitude, c2.latitude);
+							const north = Math.max(c1.latitude, c2.latitude);
+							const p1 = CesiumLib.Cartesian3.fromRadians(west, south);
+							const p2 = CesiumLib.Cartesian3.fromRadians(east, south);
+							const p3 = CesiumLib.Cartesian3.fromRadians(east, north);
+							const p4 = CesiumLib.Cartesian3.fromRadians(west, north);
+							return [p1, p2, p3, p4, p1];
+						}, false),
+						clampToGround: true,
+						width: 2,
+						material: new CesiumLib.PolylineDashMaterialProperty({ color: dashColor, dashLength: 16 }),
+						disableDepthTestDistance: Number.POSITIVE_INFINITY,
+					}
+				});
+			}
 			break;
 			
 		case 'drawCircle':
@@ -1134,12 +1674,38 @@ function createTempEntity(viewer, type) {
 						if (!hoverCartesian || positions.length === 0) return 0.1;
 						return Math.max(0.1, CesiumLib.Cartesian3.distance(positions[0], hoverCartesian));
 					}, false),
-					material: cyanColor.withAlpha(0.3),
+					material: mainColor.withAlpha(fillAlpha),
 					outline: true,
-					outlineColor: cyanColor,
+					outlineColor: mainColor,
 					outlineWidth: 2
 				}
 			});
+			if (type === 'dianCircle') {
+				tempEdgeEntity = viewer.entities.add({
+					polyline: {
+						positions: new CesiumLib.CallbackProperty(() => {
+							if (!hoverCartesian || positions.length === 0) return [];
+							const center = positions[0];
+							if (!center) return [];
+							const radius = Math.max(0.1, CesiumLib.Cartesian3.distance(center, hoverCartesian));
+							const transform = CesiumLib.Transforms.eastNorthUpToFixedFrame(center);
+							const pts = [];
+							const segments = 64;
+							for (let i = 0; i <= segments; i++) {
+								const ang = (i / segments) * CesiumLib.Math.TWO_PI;
+								const local = new CesiumLib.Cartesian3(Math.cos(ang) * radius, Math.sin(ang) * radius, 0);
+								const world = CesiumLib.Matrix4.multiplyByPoint(transform, local, new CesiumLib.Cartesian3());
+								pts.push(world);
+							}
+							return pts;
+						}, false),
+						clampToGround: true,
+						width: 2,
+						material: new CesiumLib.PolylineDashMaterialProperty({ color: dashColor, dashLength: 16 }),
+						disableDepthTestDistance: Number.POSITIVE_INFINITY,
+					}
+				});
+			}
 			tempRadiusEntity = viewer.entities.add({
 				polyline: {
 					positions: new CesiumLib.CallbackProperty(() => {
@@ -1147,7 +1713,7 @@ function createTempEntity(viewer, type) {
 						return [positions[0], hoverCartesian];
 					}, false),
 					width: 2,
-					material: new CesiumLib.PolylineDashMaterialProperty({ color: cyanColor, dashLength: 16 })
+					material: new CesiumLib.PolylineDashMaterialProperty({ color: dashColor, dashLength: 16 })
 				}
 			});
 			break;
@@ -1265,16 +1831,47 @@ function finalizeDrawing() {
 	switch (activeTool.value) {
 		case 'dianPolygon': {
 			if (positions.length >= 3) {
+				const queryMainColor = CesiumLib.Color.fromCssColorString('#334155');
 				const polyEntity = viewer.entities.add({
 					polygon: {
 						hierarchy: new CesiumLib.PolygonHierarchy([...positions]),
-						material: CesiumLib.Color.fromCssColorString('#45efff').withAlpha(0.12),
+						material: queryMainColor.withAlpha(0.5),
 						outline: true,
-						outlineColor: CesiumLib.Color.fromCssColorString('#45efff'),
+						outlineColor: queryMainColor,
 						outlineWidth: 2
 					}
 				});
 				polyEntity._djcxQuery = true;
+				const dashEntity = viewer.entities.add({
+					polyline: {
+						positions: [...positions, positions[0]],
+						clampToGround: true,
+						width: 2,
+						material: new CesiumLib.PolylineDashMaterialProperty({ color: CesiumLib.Color.BLACK.withAlpha(1), dashLength: 16 }),
+						disableDepthTestDistance: Number.POSITIVE_INFINITY,
+					}
+				});
+				dashEntity._djcxQuery = true;
+				const a = polygonArea(positions);
+				if (Number.isFinite(a) && a > 0) {
+					let sumLon = 0, sumLat = 0;
+					positions.forEach(p => { const c = toCarto(p); sumLon += CesiumLib.Math.toDegrees(c.longitude); sumLat += CesiumLib.Math.toDegrees(c.latitude); });
+					const labelPos = CesiumLib.Cartesian3.fromDegrees(sumLon / positions.length, sumLat / positions.length);
+					const areaText = a >= 1e6 ? `${(a / 1e6).toFixed(2)} km²` : `${a.toFixed(2)} m²`;
+					const queryLabel = viewer.entities.add({
+						position: labelPos,
+						label: {
+							text: areaText,
+							font: 'bold 14px Microsoft YaHei',
+							fillColor: CesiumLib.Color.WHITE,
+							showBackground: true,
+							backgroundColor: new CesiumLib.Color(0.1, 0.1, 0.1, 0.8),
+							pixelOffset: new CesiumLib.Cartesian2(0, -25),
+							disableDepthTestDistance: Number.POSITIVE_INFINITY
+						}
+					});
+					queryLabel._djcxQuery = true;
+				}
 				const ring = positions.map(p => {
 					const c = toCarto(p);
 					return [CesiumLib.Math.toDegrees(c.longitude), CesiumLib.Math.toDegrees(c.latitude)];
@@ -1283,54 +1880,157 @@ function finalizeDrawing() {
 				const last = ring[ring.length - 1];
 				if (first && last && (first[0] !== last[0] || first[1] !== last[1])) ring.push([...first]);
 				const results = djcxQueryPolygon(ring);
-				djcxSetHighlights(results);
-				if (results.length) djcxShowFeatureInPanel(results[0], results.length);
+				const grouped = djcxGroupEntitiesByFeatureKey(results);
+				const keys = [...grouped.keys()];
+				const allEntities = keys.flatMap(k => grouped.get(k)?.entities || []);
+				const reps = keys.map(k => grouped.get(k)?.rep).filter(Boolean);
+				djcxSetHighlights(allEntities);
+				if (keys.length === 1) djcxShowFeatureInPanel(reps[0], 1);
+				else if (keys.length > 1) djcxShowFeaturesInTable(reps);
 				else showInfoPanel.value = false;
 			}
 			break;
 		}
 		case 'dianRect': {
 			if (positions.length >= 2) {
+				const queryMainColor = CesiumLib.Color.fromCssColorString('#334155');
 				const c1 = toCarto(positions[0]), c2 = toCarto(positions[positions.length - 1]);
 				const rect = CesiumLib.Rectangle.fromRadians(Math.min(c1.longitude, c2.longitude), Math.min(c1.latitude, c2.latitude), Math.max(c1.longitude, c2.longitude), Math.max(c1.latitude, c2.latitude));
 				const rectEntity = viewer.entities.add({
 					rectangle: {
 						coordinates: rect,
-						material: CesiumLib.Color.fromCssColorString('#45efff').withAlpha(0.12),
+						material: queryMainColor.withAlpha(0.5),
 						outline: true,
-						outlineColor: CesiumLib.Color.fromCssColorString('#45efff'),
+						outlineColor: queryMainColor,
 						outlineWidth: 2
 					}
 				});
 				rectEntity._djcxQuery = true;
+				const dashRectEntity = viewer.entities.add({
+					polyline: {
+						positions: (() => {
+							const west = rect.west;
+							const east = rect.east;
+							const south = rect.south;
+							const north = rect.north;
+							const p1 = CesiumLib.Cartesian3.fromRadians(west, south);
+							const p2 = CesiumLib.Cartesian3.fromRadians(east, south);
+							const p3 = CesiumLib.Cartesian3.fromRadians(east, north);
+							const p4 = CesiumLib.Cartesian3.fromRadians(west, north);
+							return [p1, p2, p3, p4, p1];
+						})(),
+						clampToGround: true,
+						width: 2,
+						material: new CesiumLib.PolylineDashMaterialProperty({ color: CesiumLib.Color.BLACK.withAlpha(1), dashLength: 16 }),
+						disableDepthTestDistance: Number.POSITIVE_INFINITY,
+					}
+				});
+				dashRectEntity._djcxQuery = true;
 				const lonMin = CesiumLib.Math.toDegrees(rect.west), lonMax = CesiumLib.Math.toDegrees(rect.east);
 				const latMin = CesiumLib.Math.toDegrees(rect.south), latMax = CesiumLib.Math.toDegrees(rect.north);
+				const rectPts = [
+					CesiumLib.Cartesian3.fromDegrees(lonMin, latMin),
+					CesiumLib.Cartesian3.fromDegrees(lonMax, latMin),
+					CesiumLib.Cartesian3.fromDegrees(lonMax, latMax),
+					CesiumLib.Cartesian3.fromDegrees(lonMin, latMax)
+				];
+				const aRect = polygonArea(rectPts);
+				if (Number.isFinite(aRect) && aRect > 0) {
+					const labelPos = CesiumLib.Cartesian3.fromDegrees((lonMin + lonMax) / 2, (latMin + latMax) / 2);
+					const areaText = aRect >= 1e6 ? `${(aRect / 1e6).toFixed(2)} km²` : `${aRect.toFixed(2)} m²`;
+					const queryLabel = viewer.entities.add({
+						position: labelPos,
+						label: {
+							text: areaText,
+							font: 'bold 14px Microsoft YaHei',
+							fillColor: CesiumLib.Color.WHITE,
+							showBackground: true,
+							backgroundColor: new CesiumLib.Color(0.1, 0.1, 0.1, 0.8),
+							pixelOffset: new CesiumLib.Cartesian2(0, -25),
+							disableDepthTestDistance: Number.POSITIVE_INFINITY
+						}
+					});
+					queryLabel._djcxQuery = true;
+				}
 				const results = djcxQueryRect(lonMin, latMin, lonMax, latMax);
-				djcxSetHighlights(results);
-				if (results.length) djcxShowFeatureInPanel(results[0], results.length);
+				const grouped = djcxGroupEntitiesByFeatureKey(results);
+				const keys = [...grouped.keys()];
+				const allEntities = keys.flatMap(k => grouped.get(k)?.entities || []);
+				const reps = keys.map(k => grouped.get(k)?.rep).filter(Boolean);
+				djcxSetHighlights(allEntities);
+				if (keys.length === 1) djcxShowFeatureInPanel(reps[0], 1);
+				else if (keys.length > 1) djcxShowFeaturesInTable(reps);
 				else showInfoPanel.value = false;
 			}
 			break;
 		}
 		case 'dianCircle': {
 			if (positions.length >= 2) {
+				const queryMainColor = CesiumLib.Color.fromCssColorString('#334155');
 				const rMeters = new CesiumLib.EllipsoidGeodesic(toCarto(positions[0]), toCarto(positions[positions.length - 1])).surfaceDistance;
+				const radius = CesiumLib.Cartesian3.distance(positions[0], positions[positions.length - 1]);
 				const circleEntity = viewer.entities.add({
 					position: positions[0],
 					ellipse: {
-						semiMajorAxis: CesiumLib.Cartesian3.distance(positions[0], positions[positions.length - 1]),
-						semiMinorAxis: CesiumLib.Cartesian3.distance(positions[0], positions[positions.length - 1]),
-						material: CesiumLib.Color.fromCssColorString('#45efff').withAlpha(0.12),
+						semiMajorAxis: radius,
+						semiMinorAxis: radius,
+						material: queryMainColor.withAlpha(0.5),
 						outline: true,
-						outlineColor: CesiumLib.Color.fromCssColorString('#45efff'),
+						outlineColor: queryMainColor,
 						outlineWidth: 2
 					}
 				});
 				circleEntity._djcxQuery = true;
+				const dashCircleEntity = viewer.entities.add({
+					polyline: {
+						positions: (() => {
+							const center = positions[0];
+							if (!center) return [];
+							const transform = CesiumLib.Transforms.eastNorthUpToFixedFrame(center);
+							const pts = [];
+							const segments = 64;
+							for (let i = 0; i <= segments; i++) {
+								const ang = (i / segments) * CesiumLib.Math.TWO_PI;
+								const local = new CesiumLib.Cartesian3(Math.cos(ang) * radius, Math.sin(ang) * radius, 0);
+								const world = CesiumLib.Matrix4.multiplyByPoint(transform, local, new CesiumLib.Cartesian3());
+								pts.push(world);
+							}
+							return pts;
+						})(),
+						clampToGround: true,
+						width: 2,
+						material: new CesiumLib.PolylineDashMaterialProperty({ color: CesiumLib.Color.BLACK.withAlpha(1), dashLength: 16 }),
+						disableDepthTestDistance: Number.POSITIVE_INFINITY,
+					}
+				});
+				dashCircleEntity._djcxQuery = true;
+				if (Number.isFinite(rMeters) && rMeters > 0) {
+					const aCircle = Math.PI * rMeters * rMeters;
+					const labelPos = positions[0];
+					const areaText = aCircle >= 1e6 ? `${(aCircle / 1e6).toFixed(2)} km²` : `${aCircle.toFixed(2)} m²`;
+					const queryLabel = viewer.entities.add({
+						position: labelPos,
+						label: {
+							text: areaText,
+							font: 'bold 14px Microsoft YaHei',
+							fillColor: CesiumLib.Color.WHITE,
+							showBackground: true,
+							backgroundColor: new CesiumLib.Color(0.1, 0.1, 0.1, 0.8),
+							pixelOffset: new CesiumLib.Cartesian2(0, -25),
+							disableDepthTestDistance: Number.POSITIVE_INFINITY
+						}
+					});
+					queryLabel._djcxQuery = true;
+				}
 				const centerCarto = toCarto(positions[0]);
 				const results = djcxQueryCircle(CesiumLib.Math.toDegrees(centerCarto.longitude), CesiumLib.Math.toDegrees(centerCarto.latitude), rMeters);
-				djcxSetHighlights(results);
-				if (results.length) djcxShowFeatureInPanel(results[0], results.length);
+				const grouped = djcxGroupEntitiesByFeatureKey(results);
+				const keys = [...grouped.keys()];
+				const allEntities = keys.flatMap(k => grouped.get(k)?.entities || []);
+				const reps = keys.map(k => grouped.get(k)?.rep).filter(Boolean);
+				djcxSetHighlights(allEntities);
+				if (keys.length === 1) djcxShowFeatureInPanel(reps[0], 1);
+				else if (keys.length > 1) djcxShowFeaturesInTable(reps);
 				else showInfoPanel.value = false;
 			}
 			break;
@@ -1638,7 +2338,7 @@ function finalizeDrawing() {
 	[tempEntity, tempSolidEntity, tempEdgeEntity, tempDistanceLabel, tempAreaLabel, tempRadiusEntity, tooltipEntity, crosshairX, crosshairY].forEach(ent => {
 		if (ent) viewer.entities.remove(ent);
 	});
-	
+
 	if (drawHandler) drawHandler.destroy();
 	drawHandler = null; 
 	activeTool.value = null;
@@ -1662,7 +2362,12 @@ function setBaseLayer(name) {
 	else { removeVecLayer(); addCvaLayer(); }
 }
 function toggleLayerPanel() { layerPanelVisible.value = !layerPanelVisible.value; }
-function closeInfoPanel() { showInfoPanel.value = false; }
+function closeInfoPanel() {
+	showInfoPanel.value = false;
+	if (djcxLoadingTimer) { clearTimeout(djcxLoadingTimer); djcxLoadingTimer = null; }
+	djcxLoadingToken += 1;
+	djcxLoading.value = false;
+}
 
 // AI 相关
 function closeAiChat() { aiChatVisible.value = false; }
@@ -1699,7 +2404,12 @@ onMounted(async () => {
 	// list.value = await getLandPriceLayers();
 
 	initCesium();
-	addClickHandler(handleMapClick);
+	addClickHandler(handleMapClick, {
+		shouldHandle: (payload) => {
+			if (payload?.type === 'entity' && payload?.entity?._measureData) return true;
+			return activeTool.value === 'dianxuan';
+		}
+	});
 	addMouseMoveHandler(coords => mouseCoords.value = coords);
 	addHeadingUpdateHandler(deg => headingDeg.value = deg);
 	addScaleUpdateHandler(info => { if (info) Object.assign(scaleBar, info); });
@@ -1773,23 +2483,22 @@ function handleMapClick(info) {
 	}
 
 	if (activeTopTab.value === 'djcx') {
-		if (info?.entity?._djcxFeature) {
-			djcxSetHighlights([info.entity]);
-			djcxShowFeatureInPanel(info.entity);
-			return;
-		}
-
 		if (activeTool.value === 'dianxuan' && info?.coordinates) {
 			const results = djcxQueryPoint(info.coordinates.longitude, info.coordinates.latitude);
-			djcxSetHighlights(results);
-			if (results.length) djcxShowFeatureInPanel(results[0], results.length);
+			const grouped = djcxGroupEntitiesByFeatureKey(results);
+			const keys = [...grouped.keys()];
+			const allEntities = keys.flatMap(k => grouped.get(k)?.entities || []);
+			const reps = keys.map(k => grouped.get(k)?.rep).filter(Boolean);
+			djcxSetHighlights(allEntities);
+			if (keys.length === 1) djcxShowFeatureInPanel(reps[0], 1);
+			else if (keys.length > 1) djcxShowFeaturesInTable(reps, { withLoading: false });
 			else showInfoPanel.value = false;
 			return;
 		}
 	}
 	
 	// 如果点击的是 3D Tileset 要素
-	if (info?.properties && Object.keys(info.properties).length) {
+	if (activeTool.value === 'dianxuan' && activeTopTab.value !== 'djcx' && info?.properties && Object.keys(info.properties).length) {
 		clickInfo.value = info; 
 		showInfoPanel.value = true;
 	}

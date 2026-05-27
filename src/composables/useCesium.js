@@ -7,9 +7,10 @@
  * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
  */
 import * as Cesium from 'cesium';
+import Tdt3dPlug from 'tdt-terrain-cesium-plugin';
 
 export function useCesium(containerId) {
-		let viewer = null;
+	let viewer = null;
 
 	Cesium.Ion.defaultAccessToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiIwYTFjN2Y4Mi00ODRlLTQ0ZTQtYTgyOC05OTQ0ZmE2NTg1ZGQiLCJpZCI6MzM1MDUsImlhdCI6MTczNDMzMzQ0NX0.VljS3bQxdRzPM_XUcKsIbEx6B-xTpACL9Z2bWNKpMjc';
 
@@ -18,6 +19,64 @@ export function useCesium(containerId) {
 	// 保存 addImageryProvider 返回的 ImageryLayer 引用，便于移除
 	let vecImageryLayer = null;
 	let cvaImageryLayer = null;
+
+	function createFallbackTerrainData(provider, x, y, level) {
+		const width = provider?._width || 64;
+		const height = provider?._height || 64;
+		const buffer = typeof provider?._getVHeightBuffer === 'function'
+			? provider._getVHeightBuffer()
+			: new Uint8Array(width * height * 4);
+		const childTileMask = typeof provider?._getChildTileMask === 'function'
+			? provider._getChildTileMask(x, y, level)
+			: 0;
+
+		return new Cesium.HeightmapTerrainData({
+			buffer,
+			width,
+			height,
+			childTileMask,
+			structure: provider?._terrainDataStructure,
+		});
+	}
+
+	function wrapTdtTerrainProvider(provider) {
+		if (!provider || typeof provider.requestTileGeometry !== 'function') return provider;
+
+		const originalRequestTileGeometry = provider.requestTileGeometry.bind(provider);
+		provider.requestTileGeometry = function(x, y, level, request) {
+			const result = originalRequestTileGeometry(x, y, level, request);
+			if (!result || typeof result.then !== 'function') return result;
+
+			return result.catch((error) => {
+				const message = typeof error === 'string' ? error : error?.message || '';
+				if (message.includes('无效数据')) {
+					return createFallbackTerrainData(provider, x, y, level);
+				}
+				throw error;
+			});
+		};
+
+		return provider;
+	}
+
+	function createTdtTerrainProvider(tdtUrl, subdomains, token) {
+		if (!Tdt3dPlug?.GeoTerrainProvider) {
+			console.warn('未检测到天地图地形插件 GeoTerrainProvider，已回退为椭球地形');
+			return new Cesium.EllipsoidTerrainProvider();
+		}
+
+		try {
+			const provider = new Tdt3dPlug.GeoTerrainProvider({
+				url: `${tdtUrl}mapservice/swdx?T=elv_c&x={x}&y={y}&l={z}&tk={token}`,
+				subdomains,
+				token,
+			});
+			return wrapTdtTerrainProvider(provider);
+		} catch (error) {
+			console.error('初始化天地图地形服务失败，已回退为椭球地形:', error);
+			return new Cesium.EllipsoidTerrainProvider();
+		}
+	}
 
 	// 初始化 Cesium Viewer
 	function initCesium() {
@@ -32,7 +91,6 @@ export function useCesium(containerId) {
 			selectionIndicator:false,//是否显示选取指示器
 			timeline: false, //是否关闭时间线
 			navigationHelpButton: false, // 帮助提示
-			
 		});
 		// 隐藏版权信息
 		viewer._cesiumWidget._creditContainer.style.display = 'none';
@@ -40,8 +98,7 @@ export function useCesium(containerId) {
 		const imageryLayer = viewer.imageryLayers.get(0); // 获取第一个图层
 		// imageryLayer.brightness = 0.3; // 设置亮度，值越小颜色越暗
 
-		
-
+		// 1. 初始化 Viewer 并指定默认地形
 		setTimeout(() => {
 			viewer.camera.flyTo({
 				destination: Cesium.Cartesian3.fromDegrees(119.48, 28.4585, 10000),
@@ -55,6 +112,11 @@ export function useCesium(containerId) {
 
 		// 如果配置了天地图token（矢量标注）
 		const tiandituToken = '96746f26024715426c81adb75118da38';
+		// 服务域名
+    	var tdtUrl = 'https://t{s}.tianditu.gov.cn/';
+		// 服务负载子域
+		var subdomains=['0','1','2','3','4','5','6','7'];
+
 		// 矢量底图（路网）
 		vecLayer = new Cesium.WebMapTileServiceImageryProvider({
 		    url: 'http://t0.tianditu.gov.cn/vec_w/wmts?tk=' + tiandituToken,
@@ -74,6 +136,9 @@ export function useCesium(containerId) {
 			tileMatrixSetID: 'w',
 			maximumLevel: 18
 		});
+
+		// 天地图地形依赖外部插件的 GeoTerrainProvider，不是 Cesium 原生 API
+		viewer.terrainProvider = createTdtTerrainProvider(tdtUrl, subdomains, tiandituToken);
 
 		// viewer.extend(Cesium.viewerCesiumInspectorMixin);
 		
@@ -210,7 +275,7 @@ export function useCesium(containerId) {
 	let selectedFeatureColor;
 
 	// 添加点击事件监听器
-	function addClickHandler(callback) {
+	function addClickHandler(callback, options = {}) {
 		if (!viewer) {
 			console.error('Viewer未初始化');
 			return;
@@ -220,30 +285,6 @@ export function useCesium(containerId) {
 			const pickedObject = viewer.scene.pick(event.position);
 
 			if (Cesium.defined(pickedObject)) {
-				// 清除之前的高亮
-				if (selectedFeature) {
-					try {
-						if (selectedFeatureColor) {
-							selectedFeature.color = selectedFeatureColor;
-						}
-					} catch (error) {
-						console.warn('恢复高亮颜色失败:', error);
-					}
-					selectedFeature = null;
-					selectedFeatureColor = null;
-				}
-
-				// 设置新的高亮（仅对支持的要素类型）
-				try {
-					if (pickedObject.color !== undefined) {
-						selectedFeature = pickedObject;
-						selectedFeatureColor = pickedObject.color.clone();
-						pickedObject.color = Cesium.Color.fromCssColorString('rgba(1, 1, 1, 0.76)');
-					}
-				} catch (error) {
-					console.warn('设置高亮颜色失败:', error);
-				}
-
 				// 获取点击位置的世界坐标
 				const cartesian = viewer.camera.pickEllipsoid(event.position, viewer.scene.globe.ellipsoid);
 				let coordinates = null;
@@ -258,19 +299,72 @@ export function useCesium(containerId) {
 
 				// 实体（Entity）点击
 				if (pickedObject.id) {
+					const payload = {
+						type: 'entity',
+						entity: pickedObject.id,
+						coordinates,
+						pickedObject
+					};
+					const shouldHandle = typeof options?.shouldHandle === 'function' ? options.shouldHandle(payload) !== false : true;
+					if (!shouldHandle) return;
+
+					if (selectedFeature) {
+						try {
+							if (selectedFeatureColor) {
+								selectedFeature.color = selectedFeatureColor;
+							}
+						} catch (error) {
+							console.warn('恢复高亮颜色失败:', error);
+						}
+						selectedFeature = null;
+						selectedFeatureColor = null;
+					}
+
+					try {
+						if (pickedObject.color !== undefined) {
+							selectedFeature = pickedObject;
+							selectedFeatureColor = pickedObject.color.clone();
+							pickedObject.color = Cesium.Color.fromCssColorString('rgba(1, 1, 1, 0.76)');
+						}
+					} catch (error) {
+						console.warn('设置高亮颜色失败:', error);
+					}
+
 					if (callback && typeof callback === 'function') {
-						callback({
-							type: 'entity',
-							entity: pickedObject.id,
-							coordinates,
-							pickedObject
-						});
+						callback(payload);
 					}
 					return;
 				}
 
 				// 3D Tileset 点击
 				if (pickedObject.primitive instanceof Cesium.Cesium3DTileset) {
+					const shouldHandle = typeof options?.shouldHandle === 'function'
+						? options.shouldHandle({ type: 'tileset', coordinates, pickedObject }) !== false
+						: true;
+					if (!shouldHandle) return;
+
+					if (selectedFeature) {
+						try {
+							if (selectedFeatureColor) {
+								selectedFeature.color = selectedFeatureColor;
+							}
+						} catch (error) {
+							console.warn('恢复高亮颜色失败:', error);
+						}
+						selectedFeature = null;
+						selectedFeatureColor = null;
+					}
+
+					try {
+						if (pickedObject.color !== undefined) {
+							selectedFeature = pickedObject;
+							selectedFeatureColor = pickedObject.color.clone();
+							pickedObject.color = Cesium.Color.fromCssColorString('rgba(1, 1, 1, 0.76)');
+						}
+					} catch (error) {
+						console.warn('设置高亮颜色失败:', error);
+					}
+
 					const feature = pickedObject.detail;
 					
 					// 获取要素的属性信息
@@ -323,6 +417,34 @@ export function useCesium(containerId) {
 							pickedObject: pickedObject
 						});
 					}
+					return;
+				}
+
+				const shouldHandle = typeof options?.shouldHandle === 'function'
+					? options.shouldHandle({ type: 'unknown', coordinates, pickedObject }) !== false
+					: true;
+				if (!shouldHandle) return;
+
+				if (selectedFeature) {
+					try {
+						if (selectedFeatureColor) {
+							selectedFeature.color = selectedFeatureColor;
+						}
+					} catch (error) {
+						console.warn('恢复高亮颜色失败:', error);
+					}
+					selectedFeature = null;
+					selectedFeatureColor = null;
+				}
+
+				try {
+					if (pickedObject.color !== undefined) {
+						selectedFeature = pickedObject;
+						selectedFeatureColor = pickedObject.color.clone();
+						pickedObject.color = Cesium.Color.fromCssColorString('rgba(1, 1, 1, 0.76)');
+					}
+				} catch (error) {
+					console.warn('设置高亮颜色失败:', error);
 				}
 			}
 			

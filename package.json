@@ -12,6 +12,9 @@
     "axios": "^1.7.9",
     "cesium": "^1.124.0",
     "element-plus": "^2.9.1",
+    "pako": "^2.1.0",
+    "protobufjs": "^7.2.6",
+    "tdt-terrain-cesium-plugin": "^1.0.4",
     "vite-plugin-cesium": "^1.2.23",
     "vue": "^3.5.13"
   },
