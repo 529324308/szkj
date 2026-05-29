@@ -17,7 +17,13 @@ export function useCesium(containerId) {
 	let viewer = null;
 
 	Cesium.Ion.defaultAccessToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiIwYTFjN2Y4Mi00ODRlLTQ0ZTQtYTgyOC05OTQ0ZmE2NTg1ZGQiLCJpZCI6MzM1MDUsImlhdCI6MTczNDMzMzQ0NX0.VljS3bQxdRzPM_XUcKsIbEx6B-xTpACL9Z2bWNKpMjc';
-
+	// 设置默认视角为中国区域 (西经, 南纬, 东经, 北纬)
+	Cesium.Camera.DEFAULT_VIEW_RECTANGLE = Cesium.Rectangle.fromDegrees(
+		70.0,  // 西边经度
+		15.0,  // 南边纬度
+		135.0, // 东边经度
+		55.0   // 北边纬度
+	);
 	let vecLayer;
 	let cvaLayer;
 	// 保存 addImageryProvider 返回的 ImageryLayer 引用，便于移除
@@ -25,6 +31,37 @@ export function useCesium(containerId) {
 	let cvaImageryLayer = null;
 	let tdtTerrainProvider = null;
 	let debugRuntimeRenderHandler = null;
+	let initialHomeCameraView = null;
+	let homeRotationHandler = null;
+	let homeRotationLastTs = 0;
+	let homeRotationStartTimer = null;
+	let realtimeLightingHandler = null;
+	let realtimeLightingLastSyncMs = 0;
+	let defaultLightingState = null;
+
+	// 首页预设高度（米）：首次进入首页会将相机高度锁定到该值，并作为后续“回到首页”的恢复高度。
+	// - 只会修改高度，不会强制修改经纬度与朝向（经纬度/朝向沿用初始化相机的默认值）。
+	// - 如需完全自定义首页相机视角（含经纬度/朝向），可在业务层调用 restoreInitialHomeCameraView/enterHomeScene 前先调用 setHomePresetView。
+	let homeInitialHeightMeters = 20000000;
+
+	// 首页地球自转速度：单位为“度/秒”（deg/s），会被换算为弧度/秒用于 Cesium 相机旋转。
+	// 建议范围：0.2 ~ 1.2（越大转得越快）。
+	let homeRotationSpeedDegPerSecond = 2;
+	let homeRotationSpeedRadPerSecond = Cesium.Math.toRadians(homeRotationSpeedDegPerSecond);
+
+	// 从首页切换到非首页时的“飞行动画”目标参数（用于营造页面切换的动效衔接）。
+	// 默认使用“飞向某地”的相机飞行（camera.flyTo），如需改成飞向实体/跟随实体，可在此基础上扩展。
+	const leaveHomeFlyToPreset = {
+		longitude: 119.48,
+		latitude: 28.4585,
+		height: 10000,
+		headingDeg: 0,
+		pitchDeg: -90,
+		roll: 0,
+		durationSeconds: 1.2,
+	};
+
+	const REALTIME_LIGHTING_SYNC_INTERVAL_MS = 1000;
 	// #region debug-point A:tileset-runtime-helpers
 	const DEBUG_SERVER_URL = 'http://127.0.0.1:7778/event';
 	const DEBUG_SESSION_ID = 'tileset-camera-stutter';
@@ -168,6 +205,333 @@ export function useCesium(containerId) {
 		viewer.terrainProvider = new Cesium.EllipsoidTerrainProvider();
 	}
 
+	function clamp01(value) {
+		return Math.min(Math.max(value, 0), 1);
+	}
+
+	function lerp(start, end, t) {
+		return start + (end - start) * t;
+	}
+
+	function kelvinToColor(kelvin) {
+		const temperature = Math.max(1000, Math.min(40000, kelvin)) / 100;
+		let red;
+		let green;
+		let blue;
+
+		if (temperature <= 66) {
+			red = 255;
+			green = 99.4708025861 * Math.log(temperature) - 161.1195681661;
+			blue = temperature <= 19 ? 0 : 138.5177312231 * Math.log(temperature - 10) - 305.0447927307;
+		} else {
+			red = 329.698727446 * Math.pow(temperature - 60, -0.1332047592);
+			green = 288.1221695283 * Math.pow(temperature - 60, -0.0755148492);
+			blue = 255;
+		}
+
+		return Cesium.Color.fromBytes(
+			Math.round(Math.min(Math.max(red, 0), 255)),
+			Math.round(Math.min(Math.max(green, 0), 255)),
+			Math.round(Math.min(Math.max(blue, 0), 255)),
+			255,
+		);
+	}
+
+	function getRealtimeLightingProfile(now = new Date()) {
+		const hours = now.getHours() + now.getMinutes() / 60 + now.getSeconds() / 3600;
+		const solarPhase = Math.sin(((hours - 6) / 12) * Math.PI);
+		const daylight = clamp01(solarPhase);
+		const twilight = clamp01(Math.sin(((hours - 5) / 14) * Math.PI));
+		const intensity = daylight > 0 ? lerp(0.75, 1.25, daylight) : lerp(0.18, 0.28, twilight);
+		const colorTemperature = daylight > 0 ? lerp(2800, 6500, daylight) : lerp(2200, 3800, twilight);
+		return {
+			intensity,
+			color: kelvinToColor(colorTemperature),
+		};
+	}
+
+	function getCurrentCameraViewSnapshot() {
+		if (!viewer?.camera) return null;
+		const cartographic = viewer.camera.positionCartographic;
+		return {
+			destination: Cesium.Cartesian3.clone(viewer.camera.position),
+			orientation: {
+				heading: viewer.camera.heading,
+				pitch: viewer.camera.pitch,
+				roll: viewer.camera.roll,
+			},
+			height: cartographic?.height ?? 0,
+		};
+	}
+
+	// 设置首页“预设高度（米）”，会覆盖首次保存首页视角时的高度。
+	// 典型用法：setHomeInitialHeight(8000) 或 setHomeInitialHeight(15000)。
+	function setHomeInitialHeight(heightMeters) {
+		const next = Number(heightMeters);
+		if (!Number.isFinite(next) || next <= 0) return;
+		homeInitialHeightMeters = next;
+		if (initialHomeCameraView) {
+			const cartographic = viewer?.camera?.positionCartographic;
+			if (cartographic) {
+				initialHomeCameraView = {
+					...initialHomeCameraView,
+					destination: Cesium.Cartesian3.fromRadians(cartographic.longitude, cartographic.latitude, next),
+					height: next,
+				};
+			} else {
+				initialHomeCameraView = { ...initialHomeCameraView, height: next };
+			}
+		}
+	}
+
+	// 设置首页“自转速度（度/秒）”。
+	// 典型用法：setHomeRotationSpeed(0.4) 更慢，setHomeRotationSpeed(1.0) 更快。
+	function setHomeRotationSpeed(speedDegPerSecond) {
+		const next = Number(speedDegPerSecond);
+		if (!Number.isFinite(next) || next <= 0) return;
+		homeRotationSpeedDegPerSecond = next;
+		homeRotationSpeedRadPerSecond = Cesium.Math.toRadians(next);
+	}
+
+	// 设置首页“完整预设视角”，会覆盖首次捕获到的首页相机视角。
+	// destination: Cesium.Cartesian3
+	// orientation: { heading, pitch, roll }（单位弧度）
+	function setHomePresetView({ destination, orientation } = {}) {
+		if (!viewer) return;
+		if (!destination || !orientation) return;
+		initialHomeCameraView = {
+			destination: Cesium.Cartesian3.clone(destination),
+			orientation: { ...orientation },
+			height: Cesium.Cartographic.fromCartesian(destination).height,
+		};
+	}
+
+	function captureDefaultLightingState() {
+		if (!viewer || defaultLightingState) return;
+		defaultLightingState = {
+			clock: {
+				shouldAnimate: viewer.clock.shouldAnimate,
+				canAnimate: viewer.clock.canAnimate,
+				clockRange: viewer.clock.clockRange,
+				clockStep: viewer.clock.clockStep,
+				multiplier: viewer.clock.multiplier,
+			},
+			scene: {
+				light: viewer.scene.light,
+				highDynamicRange: viewer.scene.highDynamicRange,
+			},
+			globe: {
+				enableLighting: viewer.scene.globe.enableLighting,
+				dynamicAtmosphereLighting: viewer.scene.globe.dynamicAtmosphereLighting,
+				dynamicAtmosphereLightingFromSun: viewer.scene.globe.dynamicAtmosphereLightingFromSun,
+				showGroundAtmosphere: viewer.scene.globe.showGroundAtmosphere,
+			},
+			skyAtmosphereShow: viewer.scene.skyAtmosphere?.show ?? true,
+			shadows: viewer.shadows,
+			shadowMapEnabled: viewer.scene.shadowMap?.enabled ?? false,
+		};
+	}
+
+	// 设置“离开首页”时的飞行动画目标点（经纬度/高度）与视角（heading/pitch/roll）。
+	function setLeaveHomeFlyToPreset(preset = {}) {
+		if (!preset || typeof preset !== 'object') return;
+		if (Number.isFinite(Number(preset.longitude))) leaveHomeFlyToPreset.longitude = Number(preset.longitude);
+		if (Number.isFinite(Number(preset.latitude))) leaveHomeFlyToPreset.latitude = Number(preset.latitude);
+		if (Number.isFinite(Number(preset.height)) && Number(preset.height) > 0) leaveHomeFlyToPreset.height = Number(preset.height);
+		if (Number.isFinite(Number(preset.headingDeg))) leaveHomeFlyToPreset.headingDeg = Number(preset.headingDeg);
+		if (Number.isFinite(Number(preset.pitchDeg))) leaveHomeFlyToPreset.pitchDeg = Number(preset.pitchDeg);
+		if (Number.isFinite(Number(preset.roll))) leaveHomeFlyToPreset.roll = Number(preset.roll);
+		if (Number.isFinite(Number(preset.durationSeconds)) && Number(preset.durationSeconds) >= 0) {
+			leaveHomeFlyToPreset.durationSeconds = Number(preset.durationSeconds);
+		}
+	}
+
+	function captureInitialHomeCameraView(force = false) {
+		if (!viewer) return null;
+		if (initialHomeCameraView && !force) return initialHomeCameraView;
+		const snapshot = getCurrentCameraViewSnapshot();
+		if (snapshot) {
+			const cartographic = viewer.camera.positionCartographic;
+			const height = Number.isFinite(homeInitialHeightMeters) ? homeInitialHeightMeters : snapshot.height;
+			initialHomeCameraView = {
+				...snapshot,
+				destination: Cesium.Cartesian3.fromRadians(cartographic.longitude, cartographic.latitude, height),
+				height,
+			};
+		}
+		return initialHomeCameraView;
+	}
+
+	function clearHomeRotationStartTimer() {
+		if (homeRotationStartTimer !== null) {
+			window.clearTimeout(homeRotationStartTimer);
+			homeRotationStartTimer = null;
+		}
+	}
+
+	function stopHomeEarthRotation() {
+		clearHomeRotationStartTimer();
+		if (!viewer || !homeRotationHandler) return;
+		viewer.scene.postRender.removeEventListener(homeRotationHandler);
+		homeRotationHandler = null;
+		homeRotationLastTs = 0;
+	}
+
+	function startHomeEarthRotation() {
+		if (!viewer || homeRotationHandler) return;
+		homeRotationLastTs = performance.now();
+		homeRotationHandler = () => {
+			if (!viewer) return;
+			const now = performance.now();
+			const deltaSeconds = Math.min(Math.max((now - homeRotationLastTs) / 1000, 0), 0.1);
+			homeRotationLastTs = now;
+			viewer.camera.rotate(Cesium.Cartesian3.UNIT_Z, -homeRotationSpeedRadPerSecond * deltaSeconds);
+		};
+		viewer.scene.postRender.addEventListener(homeRotationHandler);
+	}
+
+	function restoreInitialHomeCameraView(options = {}) {
+		if (!viewer) return;
+		const targetView = captureInitialHomeCameraView();
+		if (!targetView) return;
+		const duration = Math.max(Number(options.duration ?? 1.6), 0);
+		const viewOptions = {
+			destination: Cesium.Cartesian3.clone(targetView.destination),
+			orientation: { ...targetView.orientation },
+		};
+		if (duration <= 0) {
+			viewer.camera.setView(viewOptions);
+			return Promise.resolve(true);
+		}
+		return new Promise((resolve) => {
+			try {
+				viewer.camera.flyTo({
+					...viewOptions,
+					duration,
+					maximumHeight: Math.max(targetView.height, 1),
+					complete: () => resolve(true),
+					cancel: () => resolve(false),
+				});
+			} catch {
+				resolve(false);
+			}
+		});
+	}
+
+	async function enterHomeScene(options = {}) {
+		if (!viewer) return;
+		enableRealtimeLighting();
+		const duration = Math.max(Number(options.duration ?? 1.6), 0);
+		stopHomeEarthRotation();
+		captureInitialHomeCameraView();
+		clearHomeRotationStartTimer();
+		await restoreInitialHomeCameraView({ duration });
+		startHomeEarthRotation();
+	}
+
+	// 从首页切换到其他页面时触发相机飞行（与首页侧边栏收起动画同步启动）。
+	// 返回 Promise，便于上层选择是否要等待飞行结束。
+	function flyToOnLeaveHome(options = {}) {
+		if (!viewer) return Promise.resolve(false);
+		stopHomeEarthRotation();
+		disableRealtimeLighting();
+		const preset = leaveHomeFlyToPreset;
+		const duration = Number.isFinite(Number(options.durationSeconds))
+			? Math.max(Number(options.durationSeconds), 0)
+			: preset.durationSeconds;
+		const destination = Cesium.Cartesian3.fromDegrees(
+			Number.isFinite(Number(options.longitude)) ? Number(options.longitude) : preset.longitude,
+			Number.isFinite(Number(options.latitude)) ? Number(options.latitude) : preset.latitude,
+			Number.isFinite(Number(options.height)) ? Number(options.height) : preset.height,
+		);
+		const heading = Cesium.Math.toRadians(
+			Number.isFinite(Number(options.headingDeg)) ? Number(options.headingDeg) : preset.headingDeg,
+		);
+		const pitch = Cesium.Math.toRadians(
+			Number.isFinite(Number(options.pitchDeg)) ? Number(options.pitchDeg) : preset.pitchDeg,
+		);
+		const roll = Number.isFinite(Number(options.roll)) ? Number(options.roll) : preset.roll;
+
+		return new Promise((resolve) => {
+			try {
+				viewer.camera.flyTo({
+					destination,
+					orientation: { heading, pitch, roll },
+					duration,
+					complete: () => resolve(true),
+					cancel: () => resolve(false),
+				});
+			} catch {
+				resolve(false);
+			}
+		});
+	}
+
+	function syncRealtimeLighting(force = false) {
+		if (!viewer) return;
+		const nowMs = Date.now();
+		if (!force && nowMs - realtimeLightingLastSyncMs < REALTIME_LIGHTING_SYNC_INTERVAL_MS) return;
+		realtimeLightingLastSyncMs = nowMs;
+		const now = new Date(nowMs);
+		viewer.clock.currentTime = Cesium.JulianDate.now();
+		const lighting = getRealtimeLightingProfile(now);
+		viewer.scene.light = new Cesium.SunLight({
+			color: lighting.color,
+			intensity: lighting.intensity,
+		});
+	}
+
+	function enableRealtimeLighting() {
+		if (!viewer) return;
+		captureDefaultLightingState();
+		viewer.clock.shouldAnimate = true;
+		viewer.clock.canAnimate = true;
+		viewer.clock.clockRange = Cesium.ClockRange.UNBOUNDED;
+		viewer.clock.clockStep = Cesium.ClockStep.SYSTEM_CLOCK_MULTIPLIER;
+		viewer.clock.multiplier = 1;
+		viewer.clock.currentTime = Cesium.JulianDate.now();
+		viewer.scene.globe.enableLighting = true;
+		viewer.scene.globe.dynamicAtmosphereLighting = true;
+		viewer.scene.globe.dynamicAtmosphereLightingFromSun = true;
+		viewer.scene.globe.showGroundAtmosphere = true;
+		if (viewer.scene.skyAtmosphere) viewer.scene.skyAtmosphere.show = true;
+		viewer.scene.highDynamicRange = true;
+		viewer.shadows = true;
+		viewer.scene.shadowMap.enabled = true;
+		syncRealtimeLighting(true);
+		if (realtimeLightingHandler) return;
+		realtimeLightingHandler = () => syncRealtimeLighting(false);
+		viewer.clock.onTick.addEventListener(realtimeLightingHandler);
+	}
+
+	function disableRealtimeLighting() {
+		if (!viewer) return;
+		if (realtimeLightingHandler) {
+			viewer.clock.onTick.removeEventListener(realtimeLightingHandler);
+			realtimeLightingHandler = null;
+		}
+		realtimeLightingLastSyncMs = 0;
+		if (defaultLightingState) {
+			viewer.clock.shouldAnimate = defaultLightingState.clock.shouldAnimate;
+			viewer.clock.canAnimate = defaultLightingState.clock.canAnimate;
+			viewer.clock.clockRange = defaultLightingState.clock.clockRange;
+			viewer.clock.clockStep = defaultLightingState.clock.clockStep;
+			viewer.clock.multiplier = defaultLightingState.clock.multiplier;
+			viewer.scene.light = defaultLightingState.scene.light;
+			viewer.scene.highDynamicRange = defaultLightingState.scene.highDynamicRange;
+			viewer.scene.globe.enableLighting = defaultLightingState.globe.enableLighting;
+			viewer.scene.globe.dynamicAtmosphereLighting = defaultLightingState.globe.dynamicAtmosphereLighting;
+			viewer.scene.globe.dynamicAtmosphereLightingFromSun = defaultLightingState.globe.dynamicAtmosphereLightingFromSun;
+			viewer.scene.globe.showGroundAtmosphere = defaultLightingState.globe.showGroundAtmosphere;
+			if (viewer.scene.skyAtmosphere) viewer.scene.skyAtmosphere.show = defaultLightingState.skyAtmosphereShow;
+			viewer.shadows = defaultLightingState.shadows;
+			if (viewer.scene.shadowMap) viewer.scene.shadowMap.enabled = defaultLightingState.shadowMapEnabled;
+		} else {
+			viewer.scene.globe.enableLighting = false;
+		}
+		viewer.scene.requestRender();
+	}
+
 	// 初始化 Cesium Viewer
 	function initCesium() {
 		viewer = new Cesium.Viewer(containerId, {
@@ -231,18 +595,7 @@ export function useCesium(containerId) {
 		// 调整地图对比度
 		const imageryLayer = viewer.imageryLayers.get(0); // 获取第一个图层
 		// imageryLayer.brightness = 0.3; // 设置亮度，值越小颜色越暗
-
-		// 1. 初始化 Viewer 并指定默认地形
-		setTimeout(() => {
-			viewer.camera.flyTo({
-				destination: Cesium.Cartesian3.fromDegrees(119.48, 28.4585, 10000),
-				orientation: {
-					heading: Cesium.Math.toRadians(0),
-					pitch: Cesium.Math.toRadians(-90),
-					roll: 0.0
-				}
-			});
-		}, 500);
+		// 初始化后的相机飞行逻辑已抽成 flyToOnLeaveHome()，用于“从首页切到其他页面”时与 UI 动画同步启动。
 
 		// 矢量底图（路网）
 		vecLayer = new Cesium.WebMapTileServiceImageryProvider({
@@ -266,6 +619,8 @@ export function useCesium(containerId) {
 
 		// 默认关闭地形，按需切换到网络地形
 		disableTerrain();
+		enableRealtimeLighting();
+		captureInitialHomeCameraView(true);
 
 		// viewer.extend(Cesium.viewerCesiumInspectorMixin);
 		
@@ -314,12 +669,19 @@ export function useCesium(containerId) {
 	// 销毁 Cesium Viewer
 	function destroyCesium() {
 		if (viewer) {
+			stopHomeEarthRotation();
+			if (realtimeLightingHandler) {
+				viewer.clock.onTick.removeEventListener(realtimeLightingHandler);
+				realtimeLightingHandler = null;
+			}
 			if (debugRuntimeRenderHandler) {
 				viewer.scene.postRender.removeEventListener(debugRuntimeRenderHandler);
 				debugRuntimeRenderHandler = null;
 			}
 			viewer.destroy();
 		}
+		initialHomeCameraView = null;
+		realtimeLightingLastSyncMs = 0;
 	}
 
 
@@ -847,5 +1209,17 @@ export function useCesium(containerId) {
 		removeCvaLayer,
 		enableNetworkTerrain,
 		disableTerrain,
+		setHomeInitialHeight,
+		setHomeRotationSpeed,
+		setHomePresetView,
+		setLeaveHomeFlyToPreset,
+		captureInitialHomeCameraView,
+		restoreInitialHomeCameraView,
+		enterHomeScene,
+		flyToOnLeaveHome,
+		startHomeEarthRotation,
+		stopHomeEarthRotation,
+		enableRealtimeLighting,
+		disableRealtimeLighting,
 	};
 }

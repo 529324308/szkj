@@ -9,11 +9,17 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@turf/turf": "^7.3.5",
+    "@wxperia/liquid-glass-vue": "^1.0.9",
     "axios": "^1.7.9",
     "cesium": "^1.124.0",
+    "dxf-parser": "^1.1.2",
     "element-plus": "^2.9.1",
     "pako": "^2.1.0",
+    "proj4": "^2.20.8",
     "protobufjs": "^7.2.6",
+    "shapefile": "^0.6.6",
+    "shpjs": "^6.2.0",
     "tdt-terrain-cesium-plugin": "^1.0.4",
     "vite-plugin-cesium": "^1.2.23",
     "vue": "^3.5.13"

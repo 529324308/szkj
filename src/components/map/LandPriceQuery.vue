@@ -158,6 +158,8 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { getMenuTreeList, getFeaturesByNodeIdAsync } from '../../api/map';
 
+const MENU_TREE_STORAGE_KEY = 'MENU_TREE_STORAGE_KEY';
+
 const props = defineProps({
 	active: Boolean,
 	icons: Object,
@@ -456,16 +458,130 @@ function toggleExpand(n) {
 	expanded[n.id] = !expanded[n.id];
 }
 
+function deepMergeTreeData(cachedData, freshData) {
+	const cachedMap = new Map();
+	const cachedList = Array.isArray(cachedData) ? cachedData : [];
+	cachedList.forEach((item) => {
+		if (item?.id != null) cachedMap.set(String(item.id), { ...item });
+	});
+
+	const freshList = Array.isArray(freshData) ? freshData : [];
+	const merged = [];
+	const freshMap = new Map();
+	freshList.forEach((item) => {
+		if (item?.id != null) freshMap.set(String(item.id), true);
+	});
+
+	freshList.forEach((freshItem) => {
+		const id = String(freshItem.id);
+		const cachedItem = cachedMap.get(id);
+		if (cachedItem) {
+			merged.push({
+				...freshItem,
+				isChecked: cachedItem.isChecked ?? freshItem.isChecked,
+				isFolder: freshItem.isFolder ?? cachedItem.isFolder,
+				name: freshItem.name ?? cachedItem.name,
+				displayOrder: freshItem.displayOrder ?? cachedItem.displayOrder,
+			});
+		} else {
+			merged.push({ ...freshItem });
+		}
+	});
+
+	const cachedIds = new Set(cachedMap.keys());
+	freshList.forEach((item) => {
+		if (item?.id != null) cachedIds.delete(String(item.id));
+	});
+
+	cachedIds.forEach((id) => {
+		const cachedItem = cachedMap.get(id);
+		if (cachedItem) {
+			merged.push({ ...cachedItem });
+		}
+	});
+
+	return merged;
+}
+
+function saveMenuTreeToStorage(data) {
+	try {
+		const serialized = JSON.stringify(data);
+		localStorage.setItem(MENU_TREE_STORAGE_KEY, serialized);
+	} catch (e) {
+		console.warn('保存菜单树到localStorage失败:', e);
+	}
+}
+
+function loadMenuTreeFromStorage() {
+	try {
+		const raw = localStorage.getItem(MENU_TREE_STORAGE_KEY);
+		if (!raw) return null;
+		return JSON.parse(raw);
+	} catch (e) {
+		console.warn('从localStorage加载菜单树失败:', e);
+		return null;
+	}
+}
+
+function isTreeDataChanged(cached, fresh) {
+	if (!cached || !fresh) return true;
+	const cachedList = Array.isArray(cached) ? cached : [];
+	const freshList = Array.isArray(fresh) ? fresh : [];
+	if (cachedList.length !== freshList.length) return true;
+
+	const cachedMap = new Map();
+	cachedList.forEach((item) => {
+		if (item?.id != null) cachedMap.set(String(item.id), item);
+	});
+
+	for (const freshItem of freshList) {
+		const id = String(freshItem.id);
+		const cachedItem = cachedMap.get(id);
+		if (!cachedItem) return true;
+		if (cachedItem.name !== freshItem.name) return true;
+		if (cachedItem.isFolder !== freshItem.isFolder) return true;
+	}
+	return false;
+}
+
 watch(
 	() => props.active,
 	async (val) => {
-		if (!val || menuTreeLoaded.value) return;
+		if (!val) return;
+
+		const cachedTree = loadMenuTreeFromStorage();
+		if (cachedTree && menuTreeLoaded.value) {
+			menuTreeFlat.value = cachedTree;
+			menuTreeFlat.value.forEach((it) => {
+				if (!it || it.id == null) return;
+				const id = String(it.id);
+				if (expanded[id] == null) expanded[id] = true;
+				if (checked[id] == null) checked[id] = Boolean(it.isChecked);
+			});
+		}
+
+		if (menuTreeLoaded.value) return;
+
 		menuTreeLoading.value = true;
 		menuTreeError.value = false;
 		try {
 			const data = await getMenuTreeList();
-			const list = Array.isArray(data) ? data : (data?.data || data?.list || []);
-			menuTreeFlat.value = Array.isArray(list) ? list : [];
+			const freshList = Array.isArray(data) ? data : (data?.data || data?.list || []);
+
+			if (cachedTree) {
+				const changed = isTreeDataChanged(cachedTree, freshList);
+				if (changed) {
+					const mergedList = deepMergeTreeData(cachedTree, freshList);
+					menuTreeFlat.value = mergedList;
+					saveMenuTreeToStorage(mergedList);
+				} else {
+					menuTreeFlat.value = cachedTree;
+				}
+			} else {
+				menuTreeFlat.value = freshList;
+				saveMenuTreeToStorage(freshList);
+			}
+
 			menuTreeFlat.value.forEach((it) => {
 				if (!it || it.id == null) return;
 				const id = String(it.id);
@@ -474,8 +590,10 @@ watch(
 			});
 			menuTreeLoaded.value = true;
 		} catch (e) {
-			menuTreeFlat.value = [];
-			menuTreeError.value = true;
+			if (!menuTreeFlat.value.length) {
+				menuTreeFlat.value = cachedTree || [];
+			}
+			menuTreeError.value = !!e;
 			menuTreeLoaded.value = true;
 		} finally {
 			menuTreeLoading.value = false;
@@ -572,7 +690,7 @@ watch(
 	position: absolute;
 	top: 120px;
 	width: 380px;
-	height: calc(100vh - 150px);
+	height: calc(100vh - 205px);
 	background: #fff;
 	box-shadow: 2px 0 10px rgba(0, 0, 0, 0.1);
 	z-index: 3;

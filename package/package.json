@@ -1,0 +1,30 @@
+{
+  "name": "liquid-glass-vue",
+  "type": "module",
+  "version": "0.0.1",
+  "packageManager": "pnpm@10.6.2",
+  "description": "",
+  "author": "Coutinho<tianshuntan.coutinho@gmail.com>",
+  "license": "MIT",
+  "keywords": [],
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "main": "./src/index.ts",
+  "module":"./src/index.ts",
+  "files": [
+    "dist"
+  ],
+  "lint-staged": {
+    "*": "eslint --fix"
+  },
+  "devDependencies": {
+    "@antfu/eslint-config": "^4.14.1",
+    "@types/node": "^24.0.0",
+    "eslint": "^9.28.0",
+    "tsdown": "^0.12.7",
+    "unplugin-vue": "^6.2.0",
+    "vue": "^3.5.16"
+  }
+}
