@@ -70,7 +70,13 @@
 							<span class="icon-folder" v-if="n.hasChildren" aria-hidden="true"></span>
 							<span class="icon-house" v-else aria-hidden="true"></span>
 							<label class="tree-check">
-								<input type="checkbox" :checked="checked[n.id]" @click.stop @change.stop="onCheckNode(n.id, $event)" />
+								<input
+									type="checkbox"
+									:checked="isNodeChecked(n.id)"
+									:indeterminate="isNodeIndeterminate(n.id)"
+									@click.stop
+									@change.stop="onCheckNode(n.id, $event)"
+								/>
 								<span class="item-label">{{ n.label }}</span>
 							</label>
 						</div>
@@ -371,6 +377,34 @@ const childrenByParentId = computed(() => {
 	return map;
 });
 
+const parentById = computed(() => {
+	const list = Array.isArray(menuTreeFlat.value) ? menuTreeFlat.value : [];
+	const map = new Map();
+	list.forEach((it) => {
+		if (!it || it.id == null) return;
+		const id = String(it.id);
+		const pid = String(it.parentId ?? 0);
+		if (pid && pid !== '0') map.set(id, pid);
+	});
+	return map;
+});
+
+function isNodeChecked(id) {
+	return checked[String(id)] === true;
+}
+
+function isNodeIndeterminate(id) {
+	const children = childrenByParentId.value.get(String(id)) || [];
+	if (!children.length) return false;
+	let checkedCount = 0;
+	let hasIndeterminateChild = false;
+	children.forEach((cid) => {
+		if (isNodeChecked(cid)) checkedCount += 1;
+		if (isNodeIndeterminate(cid)) hasIndeterminateChild = true;
+	});
+	return hasIndeterminateChild || (checkedCount > 0 && checkedCount < children.length);
+}
+
 function setDescendantsChecked(parentId, value) {
 	const stack = [String(parentId)];
 	while (stack.length) {
@@ -383,22 +417,88 @@ function setDescendantsChecked(parentId, value) {
 	}
 }
 
+function syncAncestorsChecked(id) {
+	let pid = parentById.value.get(String(id));
+	while (pid) {
+		const children = childrenByParentId.value.get(String(pid)) || [];
+		checked[pid] = children.length > 0 && children.every((cid) => isNodeChecked(cid));
+		pid = parentById.value.get(String(pid));
+	}
+}
+
+function syncAllParentCheckedStates() {
+	const roots = Array.isArray(menuTreeRoots.value) ? menuTreeRoots.value : [];
+	const walk = (node) => {
+		const children = Array.isArray(node?.children) ? node.children : [];
+		children.forEach(walk);
+		if (children.length) {
+			checked[String(node.id)] = children.every((child) => isNodeChecked(child.id));
+		}
+	};
+	roots.forEach(walk);
+}
+
+function collectDescendants(parentId) {
+	const result = [];
+	const stack = [String(parentId)];
+	while (stack.length) {
+		const cur = stack.pop();
+		const children = childrenByParentId.value.get(String(cur)) || [];
+		children.forEach((cid) => {
+			result.push(cid);
+			stack.push(cid);
+		});
+	}
+	return result;
+}
+
+// 收集所有叶子节点（没有子节点的节点），用于获取数据
+function collectLeafDescendants(parentId) {
+	const allDescendants = collectDescendants(parentId);
+	// 过滤出叶子节点（不再有子节点的ID）
+	return allDescendants.filter((id) => {
+		const children = childrenByParentId.value.get(String(id)) || [];
+		return children.length === 0;
+	});
+}
+
 async function onCheckNode(id, e) {
+	const nodeId = String(id);
 	const next = Boolean(e?.target?.checked);
-	checked[String(id)] = next;
-	setDescendantsChecked(id, next);
-	emit('check-menu-node', String(id));
+	checked[nodeId] = next;
+	setDescendantsChecked(nodeId, next);
+	syncAncestorsChecked(nodeId);
+	emit('check-menu-node', nodeId);
+
+	// 获取所有子节点的ID（用于显示/隐藏地图内容）
+	const descendants = collectDescendants(nodeId);
+
 	if (!next) {
-		emit('node-features-change', { id: String(id), checked: false, records: [] });
+		// 反选时：移除所有子节点的地图要素
+		descendants.forEach((childId) => {
+			emit('node-features-change', { id: childId, checked: false, records: [] });
+		});
+		emit('node-features-change', { id: nodeId, checked: false, records: [] });
 		return;
 	}
-	try {
-		const res = await getFeaturesByNodeIdAsync(String(id));
-		const list = Array.isArray(res) ? res : (res?.data || res?.list || []);
-		emit('node-features-change', { id: String(id), checked: next, records: Array.isArray(list) ? list : [] });
-	} catch (err) {
-		console.error(err);
-		emit('node-features-change', { id: String(id), checked: next, records: [], error: err });
+
+	// 勾选时：获取所有子节点的数据（而不是父节点的数据）
+	const leafDescendants = collectLeafDescendants(nodeId);
+
+	// 对每个叶子节点分别调用接口获取数据
+	for (const leafId of leafDescendants) {
+		try {
+			const res = await getFeaturesByNodeIdAsync(leafId);
+			if (!isNodeChecked(leafId)) {
+				// 如果用户已经取消勾选该节点，跳过
+				continue;
+			}
+			const list = Array.isArray(res) ? res : (res?.data || res?.list || []);
+			emit('node-features-change', { id: leafId, checked: true, records: Array.isArray(list) ? list : [] });
+		} catch (err) {
+			console.error(err);
+			if (isNodeChecked(leafId)) emit('node-features-change', { id: leafId, checked: true, records: [], error: err });
+		}
 	}
 }
 
@@ -419,6 +519,28 @@ const menuTreeRoots = computed(() => {
 			parent.children.push(node);
 		}
 	}
+
+	// 合并：父类下仅有一个子类且名字相同，则合并（不显示子类）
+	const mergeSingleChild = (node) => {
+		if (!Array.isArray(node.children) || node.children.length === 0) return;
+		node.children.forEach(mergeSingleChild);
+		if (node.children.length === 1) {
+			const child = node.children[0];
+			const nodeName = (node.name ?? node.title ?? '').trim().toLowerCase();
+			const childName = (child.name ?? child.title ?? '').trim().toLowerCase();
+			if (nodeName && nodeName === childName) {
+				// 将子节点的特征合并到父节点
+				if (Array.isArray(child.children) && child.children.length > 0) {
+					node.children = child.children;
+					node.children.forEach(mergeSingleChild);
+				} else {
+					node.children = [];
+				}
+			}
+		}
+	};
+	roots.forEach(mergeSingleChild);
+
 	const sortRec = (arr) => {
 		arr.sort((a, b) => (a.displayOrder ?? 0) - (b.displayOrder ?? 0));
 		arr.forEach((n) => {
@@ -558,6 +680,7 @@ watch(
 				if (expanded[id] == null) expanded[id] = true;
 				if (checked[id] == null) checked[id] = Boolean(it.isChecked);
 			});
+			syncAllParentCheckedStates();
 		}
 
 		if (menuTreeLoaded.value) return;
@@ -588,6 +711,7 @@ watch(
 				if (expanded[id] == null) expanded[id] = true;
 				if (checked[id] == null) checked[id] = Boolean(it.isChecked);
 			});
+			syncAllParentCheckedStates();
 			menuTreeLoaded.value = true;
 		} catch (e) {
 			if (!menuTreeFlat.value.length) {
