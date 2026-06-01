@@ -63,6 +63,7 @@ export function useCesium(containerId) {
 
 	const REALTIME_LIGHTING_SYNC_INTERVAL_MS = 1000;
 	// #region debug-point A:tileset-runtime-helpers
+	const TILESET_DEBUG_ENABLED = import.meta.env?.VITE_TILESET_DEBUG === 'true';
 	const DEBUG_SERVER_URL = 'http://127.0.0.1:7778/event';
 	const DEBUG_SESSION_ID = 'tileset-camera-stutter';
 	const DEBUG_RUN_ID = 'post-fix';
@@ -75,6 +76,7 @@ export function useCesium(containerId) {
 		progressReportByUrl: {},
 	};
 	const reportTilesetDebug = (hypothesisId, location, msg, data = {}) => {
+		if (!TILESET_DEBUG_ENABLED) return;
 		fetch(DEBUG_SERVER_URL, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
@@ -549,48 +551,50 @@ export function useCesium(containerId) {
 		// 隐藏版权信息
 		viewer._cesiumWidget._creditContainer.style.display = 'none';
 		// #region debug-point E:scene-init
-		reportTilesetDebug('E', 'useCesium.js:initCesium', 'viewer initialized', {
-			requestRenderMode: viewer.scene.requestRenderMode,
-			maximumRenderTimeChange: viewer.scene.maximumRenderTimeChange,
-			useBrowserRecommendedResolution: viewer.useBrowserRecommendedResolution,
-			msaaSamples: viewer.scene.msaaSamples,
-		});
-		debugRuntimeRenderHandler = function() {
-			const now = performance.now();
-			if (debugTilesetRuntime.lastFrameTs) {
-				const frameMs = now - debugTilesetRuntime.lastFrameTs;
-				debugTilesetRuntime.frameCount += 1;
-				if (frameMs > 20) debugTilesetRuntime.slowFrameCount += 1;
-			}
-			debugTilesetRuntime.lastFrameTs = now;
-			if (now - debugTilesetRuntime.lastReportTs < 1000) return;
-			const currentCameraSnapshot = getCameraSnapshot();
-			const cameraDelta = getCameraMoveDelta(currentCameraSnapshot, debugTilesetRuntime.lastCameraSnapshot);
-			const cameraMoving = !!cameraDelta && (
-				cameraDelta.longitudeDelta > 1e-7 ||
-				cameraDelta.latitudeDelta > 1e-7 ||
-				cameraDelta.heightDelta > 0.5 ||
-				cameraDelta.headingDelta > 1e-4 ||
-				cameraDelta.pitchDelta > 1e-4 ||
-				cameraDelta.rollDelta > 1e-4
-			);
-			const frameCount = Math.max(debugTilesetRuntime.frameCount, 1);
-			reportTilesetDebug(cameraMoving ? 'A' : 'D', 'useCesium.js:initCesium:postRender', 'scene runtime sample', {
-				fpsApprox: Number((1000 / ((now - (debugTilesetRuntime.lastReportTs || now - 1000)) / frameCount)).toFixed(2)),
-				slowFrameRatio: Number((debugTilesetRuntime.slowFrameCount / frameCount).toFixed(3)),
-				cameraMoving,
-				camera: currentCameraSnapshot,
-				cameraDelta,
-				primitivesLength: viewer.scene.primitives.length,
-				dataSourceLength: viewer.dataSources.length,
+		if (TILESET_DEBUG_ENABLED) {
+			reportTilesetDebug('E', 'useCesium.js:initCesium', 'viewer initialized', {
 				requestRenderMode: viewer.scene.requestRenderMode,
+				maximumRenderTimeChange: viewer.scene.maximumRenderTimeChange,
+				useBrowserRecommendedResolution: viewer.useBrowserRecommendedResolution,
+				msaaSamples: viewer.scene.msaaSamples,
 			});
-			debugTilesetRuntime.lastReportTs = now;
-			debugTilesetRuntime.frameCount = 0;
-			debugTilesetRuntime.slowFrameCount = 0;
-			debugTilesetRuntime.lastCameraSnapshot = currentCameraSnapshot;
-		};
-		viewer.scene.postRender.addEventListener(debugRuntimeRenderHandler);
+			debugRuntimeRenderHandler = function() {
+				const now = performance.now();
+				if (debugTilesetRuntime.lastFrameTs) {
+					const frameMs = now - debugTilesetRuntime.lastFrameTs;
+					debugTilesetRuntime.frameCount += 1;
+					if (frameMs > 20) debugTilesetRuntime.slowFrameCount += 1;
+				}
+				debugTilesetRuntime.lastFrameTs = now;
+				if (now - debugTilesetRuntime.lastReportTs < 1000) return;
+				const currentCameraSnapshot = getCameraSnapshot();
+				const cameraDelta = getCameraMoveDelta(currentCameraSnapshot, debugTilesetRuntime.lastCameraSnapshot);
+				const cameraMoving = !!cameraDelta && (
+					cameraDelta.longitudeDelta > 1e-7 ||
+					cameraDelta.latitudeDelta > 1e-7 ||
+					cameraDelta.heightDelta > 0.5 ||
+					cameraDelta.headingDelta > 1e-4 ||
+					cameraDelta.pitchDelta > 1e-4 ||
+					cameraDelta.rollDelta > 1e-4
+				);
+				const frameCount = Math.max(debugTilesetRuntime.frameCount, 1);
+				reportTilesetDebug(cameraMoving ? 'A' : 'D', 'useCesium.js:initCesium:postRender', 'scene runtime sample', {
+					fpsApprox: Number((1000 / ((now - (debugTilesetRuntime.lastReportTs || now - 1000)) / frameCount)).toFixed(2)),
+					slowFrameRatio: Number((debugTilesetRuntime.slowFrameCount / frameCount).toFixed(3)),
+					cameraMoving,
+					camera: currentCameraSnapshot,
+					cameraDelta,
+					primitivesLength: viewer.scene.primitives.length,
+					dataSourceLength: viewer.dataSources.length,
+					requestRenderMode: viewer.scene.requestRenderMode,
+				});
+				debugTilesetRuntime.lastReportTs = now;
+				debugTilesetRuntime.frameCount = 0;
+				debugTilesetRuntime.slowFrameCount = 0;
+				debugTilesetRuntime.lastCameraSnapshot = currentCameraSnapshot;
+			};
+			viewer.scene.postRender.addEventListener(debugRuntimeRenderHandler);
+		}
 		// #endregion
 		// 调整地图对比度
 		const imageryLayer = viewer.imageryLayers.get(0); // 获取第一个图层

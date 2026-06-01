@@ -144,14 +144,14 @@
 		</div>
 
 		<!-- 底部工具按钮 -->
-		<div v-if="activeTopTab !== 'home'" class="dibu_tool">
+		<div class="dibu_tool">
 			<div class="dibu_tool_btn dingwei" @click="locateToMe"></div>
 			<div class="dibu_tool_btn tuceng" ref="layerBtnRef" @click="toggleLayerPanel"></div>
 			<div class="dibu_tool_btn zhinanzhen" :style="{ transform: 'rotate(' + compassRotation + 'deg)' }"></div>
 		</div>
 
 		<!-- 图层选择悬浮面板 -->
-		<div v-if="activeTopTab !== 'home' && layerPanelVisible" ref="layerPanelRef" class="layer-panel" @click.stop>
+		<div v-if="layerPanelVisible" ref="layerPanelRef" class="layer-panel" @click.stop>
 			<div class="layer-grid">
 				<div class="layer-card" :class="{ active: baseLayerActive === '卫星图' }" @click="setBaseLayer('卫星图')">
 					<div class="thumb thumb-satellite"></div>
@@ -405,56 +405,6 @@ const selectedKmlItemKey = ref('');
 const cadImportItems = ref([]);
 const selectedCadItemKey = ref('');
 const selectedMarkPointEntityId = ref('');
-
-// 统一高亮状态管理 - 使用单一标识符
-let selectedSyInfoKey = '';
-const selectedSyInfoKeyRef = ref('');
-
-// 要素级别选中状态跟踪（支持同一文件中不同要素的选择）
-const selectedShpFeatureEntityId = ref('');
-const selectedKmlFeatureEntityId = ref('');
-const selectedCadFeatureEntityId = ref('');
-
-function getSelectedSyInfoKey() {
-	return selectedSyInfoKey;
-}
-
-function setSelectedSyInfoKey(key) {
-	selectedSyInfoKey = key;
-	selectedSyInfoKeyRef.value = key;
-}
-
-function clearAllSySelection() {
-	// 清空所有选中状态
-	const viewer = getViewer();
-
-	// 清除标点高亮
-	if (selectedMarkPointEntityId.value) {
-		const prevMarkPoint = viewer?.entities.getById(selectedMarkPointEntityId.value);
-		if (prevMarkPoint) setEntityHighlight(prevMarkPoint, false);
-		selectedMarkPointEntityId.value = '';
-	}
-
-	// 清除测绘实体高亮
-	if (currentMeasureEntity) {
-		setEntityHighlight(currentMeasureEntity, false);
-		currentMeasureEntity = null;
-		currentMeasurePoints = [];
-		measurePanelVisible.value = false;
-	}
-
-	// 清空其他选中状态
-	selectedTerrainItemKey.value = '';
-	selectedShpItemKey.value = '';
-	selectedKmlItemKey.value = '';
-	selectedCadItemKey.value = '';
-
-	// 更新统一状态
-	setSelectedSyInfoKey('');
-
-	// 关闭可能打开的面板
-	closeShpFeaturePopup();
-}
 const shpFeaturePopupVisible = ref(false);
 const shpFeaturePopupMinimized = ref(false);
 const shpFeaturePopup = reactive({
@@ -2524,7 +2474,7 @@ const syInfoItems = computed(() => {
 			name: '网络地形',
 			typeLabel: '地形',
 			checked: terrainNetworkVisible.value,
-			selected: selectedSyInfoKey === 'terrain-network',
+			selected: selectedTerrainItemKey.value === 'terrain-network',
 			kind: 'terrain-network',
 			subtitle: '天地图地形'
 		});
@@ -2537,7 +2487,7 @@ const syInfoItems = computed(() => {
 			name: name || getDefaultTerrainName(index),
 			typeLabel: '模型',
 			checked: tileset?.show !== false,
-			selected: selectedSyInfoKey === `terrain-model:${url}`,
+			selected: selectedTerrainItemKey.value === `terrain-model:${url}`,
 			kind: 'terrain-model',
 			url,
 			subtitle: url
@@ -2552,7 +2502,7 @@ const syInfoItems = computed(() => {
 				name: entity._syMarkPointData?.name || entity.name || '标点',
 				typeLabel: '标点',
 				checked: entity._syUserVisible !== false,
-				selected: selectedSyInfoKey === `markPoint:${entity.id}`,
+				selected: selectedMarkPointEntityId.value === entity.id,
 				kind: 'markPoint',
 				entity,
 				subtitle: entity._syMarkPointData?.desc || ''
@@ -2567,7 +2517,7 @@ const syInfoItems = computed(() => {
 				name: entity._measureData?.name || inferMeasureItemType(entity),
 				typeLabel: inferMeasureItemType(entity),
 				checked: entity._syUserVisible !== false,
-				selected: selectedSyInfoKey === `measure:${entity.id}`,
+				selected: currentMeasureEntity === entity,
 				kind: 'measure',
 				entity,
 				subtitle: entity._measureData?.desc || ''
@@ -2583,7 +2533,7 @@ const syInfoItems = computed(() => {
 				name: item.name,
 				typeLabel: 'SHP',
 				checked: dataSource?.show !== false,
-				selected: selectedSyInfoKey === `shp:${item.key}`,
+				selected: selectedShpItemKey.value === item.key,
 				kind: 'shp',
 				sourceFileName: item.sourceFileName,
 				subtitle: item.sourceFileName || `共 ${item.featureCount} 个要素`
@@ -2599,7 +2549,7 @@ const syInfoItems = computed(() => {
 				name: item.name,
 				typeLabel: 'KML',
 				checked: dataSource?.show !== false,
-				selected: selectedSyInfoKey === `kml:${item.key}`,
+				selected: selectedKmlItemKey.value === item.key,
 				kind: 'kml',
 				sourceFileName: item.sourceFileName,
 				subtitle: item.sourceFileName || ''
@@ -2615,7 +2565,7 @@ const syInfoItems = computed(() => {
 				name: item.name,
 				typeLabel: 'CAD',
 				checked: dataSource?.show !== false,
-				selected: selectedSyInfoKey === `cad:${item.key}`,
+				selected: selectedCadItemKey.value === item.key,
 				kind: 'cad',
 				sourceFileName: item.sourceFileName,
 				subtitle: item.coordinateSystemLabel || item.sourceFileName || `已绘制 ${item.renderedCount} / ${item.sourceCount} 个实体`,
@@ -4114,88 +4064,112 @@ function closeTerrain() {
 
 // 处理地图点击
 function handleMapClick(info) {
-	const currentKey = getSelectedSyInfoKey();
-
 	// 如果点击的是测量实体
 	if (info?.entity?._measureData) {
-		const newKey = `measure:${info.entity.id}`;
-		if (currentKey === newKey) {
-			// 点击当前已选中的测量实体，取消选中
-			clearAllSySelection();
-		} else {
-			selectSyInfoItem({ kind: 'measure', entity: info.entity, key: newKey }, { locate: false });
-		}
+		selectSyInfoItem({ kind: 'measure', entity: info.entity }, { locate: false });
 		closeShpFeaturePopup();
 		return;
 	}
-
 	if (info?.entity?._syMarkPointData) {
-		const newKey = `markPoint:${info.entity.id}`;
-		if (currentKey === newKey) {
-			// 点击当前已选中的标点，取消选中
-			clearAllSySelection();
-		} else {
-			clearAllSySelection();
-			if (info.entity._syUserVisible === false) setMarkPointEntityVisible(info.entity, true);
-			selectedMarkPointEntityId.value = info.entity.id;
-			setEntityHighlight(info.entity, true);
-			activeTopTab.value = 'sy';
-			measureActiveTab.value = 'info';
-			measurePanelVisible.value = true;
-			applyMarkPointDataToPanel(info.entity._syMarkPointData);
-			setSelectedSyInfoKey(newKey);
-		}
-		bumpSyInfoListVersion();
 		const viewer = getViewer();
+		if (currentMeasureEntity) {
+			setEntityHighlight(currentMeasureEntity, false);
+			currentMeasureEntity = null;
+			currentMeasurePoints = [];
+			measurePanelVisible.value = false;
+		}
+		selectedTerrainItemKey.value = '';
+		selectedShpItemKey.value = '';
+		selectedKmlItemKey.value = '';
+		selectedCadItemKey.value = '';
+		closeShpFeaturePopup();
+		if (selectedMarkPointEntityId.value) {
+			const prev = viewer?.entities.getById(selectedMarkPointEntityId.value);
+			if (prev && prev !== info.entity) setEntityHighlight(prev, false);
+		}
+		if (info.entity._syUserVisible === false) setMarkPointEntityVisible(info.entity, true);
+		selectedMarkPointEntityId.value = info.entity.id;
+		setEntityHighlight(info.entity, true);
+		activeTopTab.value = 'sy';
+		measureActiveTab.value = 'info';
+		measurePanelVisible.value = true;
+		applyMarkPointDataToPanel(info.entity._syMarkPointData);
+		bumpSyInfoListVersion();
 		if (viewer) viewer.scene.requestRender();
 		return;
 	}
-
 	if (info?.entity?._syShpItemKey) {
-		const newKey = `shp:${info.entity._syShpItemKey}`;
-		if (currentKey === newKey) {
-			clearAllSySelection();
-		} else {
-			clearAllSySelection();
-			selectedShpItemKey.value = info.entity._syShpItemKey;
-			activeTopTab.value = 'sy';
-			openShpFeaturePopup(info.entity._syShpFeatureMeta);
-			setSelectedSyInfoKey(newKey);
+		if (currentMeasureEntity) {
+			setEntityHighlight(currentMeasureEntity, false);
+			currentMeasureEntity = null;
+			currentMeasurePoints = [];
+			measurePanelVisible.value = false;
 		}
+		selectedTerrainItemKey.value = '';
+		selectedKmlItemKey.value = '';
+		selectedCadItemKey.value = '';
+		selectedShpItemKey.value = info.entity._syShpItemKey;
+		activeTopTab.value = 'sy';
+		openShpFeaturePopup(info.entity._syShpFeatureMeta);
 		bumpSyInfoListVersion();
 		return;
 	}
-
 	if (info?.entity?._syKmlItemKey) {
-		const newKey = `kml:${info.entity._syKmlItemKey}`;
-		if (currentKey === newKey) {
-			clearAllSySelection();
-		} else {
-			clearAllSySelection();
-			selectedKmlItemKey.value = info.entity._syKmlItemKey;
-			activeTopTab.value = 'sy';
-			setSelectedSyInfoKey(newKey);
+		if (currentMeasureEntity) {
+			setEntityHighlight(currentMeasureEntity, false);
+			currentMeasureEntity = null;
+			currentMeasurePoints = [];
+			measurePanelVisible.value = false;
 		}
+		selectedTerrainItemKey.value = '';
+		selectedShpItemKey.value = '';
+		selectedCadItemKey.value = '';
+		closeShpFeaturePopup();
+		selectedKmlItemKey.value = info.entity._syKmlItemKey;
+		activeTopTab.value = 'sy';
 		bumpSyInfoListVersion();
 		return;
 	}
-
 	if (info?.entity?._syCadItemKey) {
-		const newKey = `cad:${info.entity._syCadItemKey}`;
-		if (currentKey === newKey) {
-			clearAllSySelection();
-		} else {
-			clearAllSySelection();
-			selectedCadItemKey.value = info.entity._syCadItemKey;
-			activeTopTab.value = 'sy';
-			setSelectedSyInfoKey(newKey);
+		if (currentMeasureEntity) {
+			setEntityHighlight(currentMeasureEntity, false);
+			currentMeasureEntity = null;
+			currentMeasurePoints = [];
+			measurePanelVisible.value = false;
 		}
+		selectedTerrainItemKey.value = '';
+		selectedShpItemKey.value = '';
+		selectedKmlItemKey.value = '';
+		closeShpFeaturePopup();
+		selectedCadItemKey.value = info.entity._syCadItemKey;
+		activeTopTab.value = 'sy';
 		bumpSyInfoListVersion();
 		return;
 	}
 	
 	// 点击空白处取消选中
-	clearAllSySelection();
+	if (currentMeasureEntity) {
+		setEntityHighlight(currentMeasureEntity, false);
+		currentMeasureEntity = null;
+		currentMeasurePoints = [];
+		measurePanelVisible.value = false;
+	}
+	if (selectedMarkPointEntityId.value) {
+		const viewer = getViewer();
+		const selected = viewer?.entities.getById(selectedMarkPointEntityId.value);
+		if (selected) setEntityHighlight(selected, false);
+		selectedMarkPointEntityId.value = '';
+		if (measureForm.kind === 'markPoint') {
+			measurePanelVisible.value = false;
+			Object.assign(measureForm, { ...DEFAULT_MEASURE_FORM });
+		}
+	}
+	if (selectedTerrainItemKey.value || selectedShpItemKey.value || selectedKmlItemKey.value || selectedCadItemKey.value) {
+		selectedTerrainItemKey.value = '';
+		selectedShpItemKey.value = '';
+		selectedKmlItemKey.value = '';
+		selectedCadItemKey.value = '';
+	}
 	bumpSyInfoListVersion();
 
 	if (activeTopTab.value === 'djcx') {
@@ -4237,6 +4211,10 @@ function toggleSyInfoItem({ item, checked }) {
 	if (!item) return;
 	const viewer = getViewer();
 	if (item.kind === 'measure') {
+		selectedTerrainItemKey.value = '';
+		selectedShpItemKey.value = '';
+		selectedKmlItemKey.value = '';
+		selectedCadItemKey.value = '';
 		closeShpFeaturePopup();
 		setMeasureEntityVisible(item.entity, checked);
 		if (viewer) viewer.scene.requestRender();
@@ -4249,9 +4227,7 @@ function toggleSyInfoItem({ item, checked }) {
 	}
 	if (item.kind === 'terrain-network') {
 		terrainNetworkVisible.value = checked;
-		if (!checked && selectedSyInfoKey === 'terrain-network') {
-			clearAllSySelection();
-		}
+		if (!checked && selectedTerrainItemKey.value === 'terrain-network') selectedTerrainItemKey.value = '';
 		if (checked) enableNetworkTerrain();
 		else disableTerrain();
 		updateTerrainActiveState();
@@ -4263,8 +4239,9 @@ function toggleSyInfoItem({ item, checked }) {
 		const dataSource = shpDataSourceMap.get(item.key);
 		if (!dataSource) return;
 		dataSource.show = checked;
-		if (!checked && selectedSyInfoKey === `shp:${item.key}`) {
-			clearAllSySelection();
+		if (!checked && selectedShpItemKey.value === item.key) {
+			selectedShpItemKey.value = '';
+			closeShpFeaturePopup();
 		}
 		bumpSyInfoListVersion();
 		if (viewer) viewer.scene.requestRender();
@@ -4274,8 +4251,8 @@ function toggleSyInfoItem({ item, checked }) {
 		const dataSource = kmlDataSourceMap.get(item.key);
 		if (!dataSource) return;
 		dataSource.show = checked;
-		if (!checked && selectedSyInfoKey === `kml:${item.key}`) {
-			clearAllSySelection();
+		if (!checked && selectedKmlItemKey.value === item.key) {
+			selectedKmlItemKey.value = '';
 		}
 		bumpSyInfoListVersion();
 		if (viewer) viewer.scene.requestRender();
@@ -4285,8 +4262,8 @@ function toggleSyInfoItem({ item, checked }) {
 		const dataSource = cadDataSourceMap.get(item.key);
 		if (!dataSource) return;
 		dataSource.show = checked;
-		if (!checked && selectedSyInfoKey === `cad:${item.key}`) {
-			clearAllSySelection();
+		if (!checked && selectedCadItemKey.value === item.key) {
+			selectedCadItemKey.value = '';
 		}
 		bumpSyInfoListVersion();
 		if (viewer) viewer.scene.requestRender();
@@ -4296,9 +4273,7 @@ function toggleSyInfoItem({ item, checked }) {
 		const tileset = terrainTilesetMap.get(item.url);
 		if (!tileset) return;
 		tileset.show = checked;
-		if (!checked && selectedSyInfoKey === `terrain-model:${item.url}`) {
-			clearAllSySelection();
-		}
+		if (!checked && selectedTerrainItemKey.value === `terrain-model:${item.url}`) selectedTerrainItemKey.value = '';
 		updateTerrainActiveState();
 		bumpSyInfoListVersion();
 		if (viewer) viewer.scene.requestRender();
@@ -4330,24 +4305,16 @@ function selectSyInfoItem(item, options = {}) {
 	if (!item) return;
 	const viewer = getViewer();
 	const { locate = true, preservePitch = true } = options;
-
-	// 使用统一的选择状态管理
-	const currentKey = getSelectedSyInfoKey();
-	const newKey = item.key;
-
-	// 如果点击的是当前已选中的项目，则取消选中
-	if (currentKey === newKey) {
-		clearAllSySelection();
-		bumpSyInfoListVersion();
-		return;
-	}
-
-	// 首先清除所有现有的高亮状态
-	clearAllSySelection();
-
-	// 然后设置新的选中状态
 	if (item.kind === 'measure' && item.entity?._measureData) {
+		selectedTerrainItemKey.value = '';
+		selectedShpItemKey.value = '';
+		selectedKmlItemKey.value = '';
+		selectedCadItemKey.value = '';
+		closeShpFeaturePopup();
 		if (item.entity._syUserVisible === false) setMeasureEntityVisible(item.entity, true);
+		if (currentMeasureEntity && currentMeasureEntity !== item.entity) {
+			setEntityHighlight(currentMeasureEntity, false);
+		}
 		currentMeasureEntity = item.entity;
 		currentMeasurePoints = item.entity._measurePoints || [];
 		setEntityHighlight(currentMeasureEntity, true);
@@ -4355,7 +4322,6 @@ function selectSyInfoItem(item, options = {}) {
 		applyMeasureDataToPanel(item.entity._measureData);
 		measureActiveTab.value = 'info';
 		activeTopTab.value = 'sy';
-		setSelectedSyInfoKey(item.key);
 		if (viewer && locate) {
 			if (preservePitch) zoomToTargetPreservePitch(item.entity);
 			else viewer.zoomTo(item.entity);
@@ -4363,16 +4329,38 @@ function selectSyInfoItem(item, options = {}) {
 		bumpSyInfoListVersion();
 		return;
 	}
-
+	if (currentMeasureEntity) {
+		setEntityHighlight(currentMeasureEntity, false);
+		currentMeasureEntity = null;
+		currentMeasurePoints = [];
+		measurePanelVisible.value = false;
+	}
+	if (item.kind !== 'markPoint' && selectedMarkPointEntityId.value) {
+		const prev = viewer?.entities.getById(selectedMarkPointEntityId.value);
+		if (prev) setEntityHighlight(prev, false);
+		selectedMarkPointEntityId.value = '';
+		if (measureForm.kind === 'markPoint') {
+			measurePanelVisible.value = false;
+			Object.assign(measureForm, { ...DEFAULT_MEASURE_FORM });
+		}
+	}
 	if (item.kind === 'markPoint' && viewer) {
+		selectedTerrainItemKey.value = '';
+		selectedShpItemKey.value = '';
+		selectedKmlItemKey.value = '';
+		selectedCadItemKey.value = '';
+		closeShpFeaturePopup();
 		if (item.entity?._syUserVisible === false) setMarkPointEntityVisible(item.entity, true);
+		if (selectedMarkPointEntityId.value) {
+			const prev = viewer.entities.getById(selectedMarkPointEntityId.value);
+			if (prev && prev !== item.entity) setEntityHighlight(prev, false);
+		}
 		selectedMarkPointEntityId.value = item.entity.id;
 		setEntityHighlight(item.entity, true);
 		activeTopTab.value = 'sy';
 		measureActiveTab.value = 'info';
 		measurePanelVisible.value = true;
 		applyMarkPointDataToPanel(item.entity?._syMarkPointData || {});
-		setSelectedSyInfoKey(item.key);
 		if (locate) {
 			if (preservePitch) zoomToTargetPreservePitch(item.entity);
 			else viewer.zoomTo(item.entity);
@@ -4380,16 +4368,20 @@ function selectSyInfoItem(item, options = {}) {
 		bumpSyInfoListVersion();
 		return;
 	}
-
 	if (item.kind === 'terrain-network') {
+		selectedShpItemKey.value = '';
+		selectedKmlItemKey.value = '';
+		selectedCadItemKey.value = '';
+		closeShpFeaturePopup();
 		selectedTerrainItemKey.value = 'terrain-network';
 		activeTopTab.value = 'sy';
-		setSelectedSyInfoKey(item.key);
 		bumpSyInfoListVersion();
 		return;
 	}
-
 	if (item.kind === 'shp' && viewer) {
+		selectedTerrainItemKey.value = '';
+		selectedKmlItemKey.value = '';
+		selectedCadItemKey.value = '';
 		selectedShpItemKey.value = item.key;
 		const dataSource = shpDataSourceMap.get(item.key);
 		if (dataSource) {
@@ -4399,12 +4391,14 @@ function selectSyInfoItem(item, options = {}) {
 			if (previewEntity?._syShpFeatureMeta) openShpFeaturePopup(previewEntity._syShpFeatureMeta);
 		}
 		activeTopTab.value = 'sy';
-		setSelectedSyInfoKey(item.key);
 		bumpSyInfoListVersion();
 		return;
 	}
-
 	if (item.kind === 'kml' && viewer) {
+		selectedTerrainItemKey.value = '';
+		selectedShpItemKey.value = '';
+		selectedCadItemKey.value = '';
+		closeShpFeaturePopup();
 		selectedKmlItemKey.value = item.key;
 		const dataSource = kmlDataSourceMap.get(item.key);
 		if (dataSource) {
@@ -4415,12 +4409,14 @@ function selectSyInfoItem(item, options = {}) {
 			}
 		}
 		activeTopTab.value = 'sy';
-		setSelectedSyInfoKey(item.key);
 		bumpSyInfoListVersion();
 		return;
 	}
-
 	if (item.kind === 'cad' && viewer) {
+		selectedTerrainItemKey.value = '';
+		selectedShpItemKey.value = '';
+		selectedKmlItemKey.value = '';
+		closeShpFeaturePopup();
 		selectedCadItemKey.value = item.key;
 		const dataSource = cadDataSourceMap.get(item.key);
 		if (dataSource) {
@@ -4431,17 +4427,18 @@ function selectSyInfoItem(item, options = {}) {
 			}
 		}
 		activeTopTab.value = 'sy';
-		setSelectedSyInfoKey(item.key);
 		bumpSyInfoListVersion();
 		return;
 	}
-
 	if (item.kind === 'terrain-model' && viewer) {
+		selectedShpItemKey.value = '';
+		selectedKmlItemKey.value = '';
+		selectedCadItemKey.value = '';
+		closeShpFeaturePopup();
 		selectedTerrainItemKey.value = `terrain-model:${item.url}`;
 		const tileset = terrainTilesetMap.get(item.url);
 		if (tileset) viewer.zoomTo(tileset);
 		activeTopTab.value = 'sy';
-		setSelectedSyInfoKey(item.key);
 		bumpSyInfoListVersion();
 	}
 }
@@ -4465,10 +4462,7 @@ function deleteMeasureEntity(entity) {
 function deleteTerrainModelItem(url, options = {}) {
 	if (!url) return;
 	const keepStorage = options?.keepStorage === true;
-	const itemKey = `terrain-model:${url}`;
-	if (selectedSyInfoKey === itemKey) {
-		clearAllSySelection();
-	}
+	if (selectedTerrainItemKey.value === `terrain-model:${url}`) selectedTerrainItemKey.value = '';
 	remove3DTileset(url);
 	terrainTilesetMap.delete(url);
 	terrainModelItems.value = terrainModelItems.value.filter((item) => item.url !== url);
@@ -4481,9 +4475,9 @@ function deleteShpImportItem(key) {
 	if (!key) return;
 	const viewer = getViewer();
 	const dataSource = shpDataSourceMap.get(key);
-	const itemKey = `shp:${key}`;
-	if (selectedSyInfoKey === itemKey) {
-		clearAllSySelection();
+	if (selectedShpItemKey.value === key) {
+		selectedShpItemKey.value = '';
+		closeShpFeaturePopup();
 	}
 	if (viewer && dataSource) {
 		try { viewer.dataSources.remove(dataSource, true); } catch { /* ignore */ }
@@ -4497,9 +4491,8 @@ function deleteKmlImportItem(key) {
 	if (!key) return;
 	const viewer = getViewer();
 	const dataSource = kmlDataSourceMap.get(key);
-	const itemKey = `kml:${key}`;
-	if (selectedSyInfoKey === itemKey) {
-		clearAllSySelection();
+	if (selectedKmlItemKey.value === key) {
+		selectedKmlItemKey.value = '';
 	}
 	if (viewer && dataSource) {
 		try { viewer.dataSources.remove(dataSource, true); } catch { /* ignore */ }
@@ -4518,9 +4511,8 @@ function deleteCadImportItem(key) {
 	if (!key) return;
 	const viewer = getViewer();
 	const dataSource = cadDataSourceMap.get(key);
-	const itemKey = `cad:${key}`;
-	if (selectedSyInfoKey === itemKey) {
-		clearAllSySelection();
+	if (selectedCadItemKey.value === key) {
+		selectedCadItemKey.value = '';
 	}
 	if (viewer && dataSource) {
 		try { viewer.dataSources.remove(dataSource, true); } catch { /* ignore */ }
@@ -4558,9 +4550,7 @@ function deleteSyInfoItem(item) {
 	}
 	if (item.kind === 'terrain-network') {
 		terrainNetworkVisible.value = false;
-		if (selectedSyInfoKey === 'terrain-network') {
-			clearAllSySelection();
-		}
+		if (selectedTerrainItemKey.value === 'terrain-network') selectedTerrainItemKey.value = '';
 		disableTerrain();
 		updateTerrainActiveState();
 		bumpSyInfoListVersion();
@@ -4581,7 +4571,11 @@ async function deleteCurrentMeasure() {
 async function clearAllMeasures() {
 	resetDrawing();
 	const viewer = getViewer();
-	clearAllSySelection();
+	if (selectedMarkPointEntityId.value) {
+		const selected = viewer?.entities.getById(selectedMarkPointEntityId.value);
+		if (selected) setEntityHighlight(selected, false);
+		selectedMarkPointEntityId.value = '';
+	}
 	[...viewer.entities.values].forEach(ent => {
 		if (ent._measureData || ent._drawn || ent.name === 'measure-label') {
 			if (ent._measureLabel) viewer.entities.remove(ent._measureLabel);
@@ -4592,7 +4586,14 @@ async function clearAllMeasures() {
 			viewer.entities.remove(ent);
 		}
 	});
+	currentMeasureEntity = null;
+	currentMeasurePoints = [];
+	measurePanelVisible.value = false;
 	Object.assign(measureForm, { ...DEFAULT_MEASURE_FORM });
+	selectedShpItemKey.value = '';
+	selectedKmlItemKey.value = '';
+	selectedCadItemKey.value = '';
+	closeShpFeaturePopup();
 	[...shpImportItems.value].forEach((item) => deleteShpImportItem(item.key));
 	[...kmlImportItems.value].forEach((item) => deleteKmlImportItem(item.key));
 	[...cadImportItems.value].forEach((item) => deleteCadImportItem(item.key));
