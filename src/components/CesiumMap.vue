@@ -600,6 +600,55 @@ function djcxToRoman(num) {
 	return out;
 }
 
+function djcxParseChineseLevelNumber(value) {
+	const text = String(value || '').trim();
+	if (!text) return NaN;
+	const normalized = text.replace(/[级类等土地用途分区空间]/g, '');
+	if (!normalized) return NaN;
+	const digitMap = {
+		'零': 0,
+		'一': 1,
+		'二': 2,
+		'两': 2,
+		'三': 3,
+		'四': 4,
+		'五': 5,
+		'六': 6,
+		'七': 7,
+		'八': 8,
+		'九': 9,
+	};
+	if (normalized === '十') return 10;
+	if (normalized.includes('十')) {
+		const [tensPart, onesPart] = normalized.split('十');
+		const tens = tensPart ? digitMap[tensPart] : 1;
+		const ones = onesPart ? digitMap[onesPart] : 0;
+		if (Number.isFinite(tens) && Number.isFinite(ones)) return tens * 10 + ones;
+	}
+	if (Object.prototype.hasOwnProperty.call(digitMap, normalized)) return digitMap[normalized];
+	return NaN;
+}
+
+function djcxResolveLevelRoman(props, fallbackOrder) {
+	const rawLevel = djcxGetProp(props, ['土地级别', 'TDJB', 'tdjb', 'LEVEL', 'level', '级别']);
+	if (rawLevel != null && rawLevel !== '') {
+		const text = String(rawLevel).trim();
+		if (text) {
+			const numericMatch = text.match(/\d+/);
+			if (numericMatch) {
+				const roman = djcxToRoman(Number(numericMatch[0]));
+				if (roman) return roman;
+			}
+			const romanMatch = text.toUpperCase().match(/[IVXLCDM]+/);
+			if (romanMatch?.[0]) return romanMatch[0];
+			const chineseLevel = djcxParseChineseLevelNumber(text);
+			const roman = djcxToRoman(chineseLevel);
+			if (roman) return roman;
+		}
+	}
+	return djcxToRoman(fallbackOrder);
+}
+
 function djcxColorForIndex(index, total) {
 	const i = Math.max(1, Number(index || 1));
 	const t = Math.max(1, Number(total || 1));
@@ -876,6 +925,7 @@ async function djcxAddNodeFeatures(nodeId, records) {
 		const order = Number.isFinite(rawIndex) && rawIndex > 0 ? Math.min(total, Math.max(1, rawIndex)) : 1;
 		ent._djcxOrder = order;
 		ent._djcxRoman = djcxToRoman(order);
+		ent._djcxLevelRoman = djcxResolveLevelRoman(ent._djcxProperties, order);
 		const baseColor = djcxColorForIndex(order, total);
 		ent._djcxBaseStyle = {
 			FILL: baseColor.withAlpha(djcxNodeFillAlpha),
@@ -933,7 +983,7 @@ async function djcxAddNodeFeatures(nodeId, records) {
 			const labelEntity = ds.entities.add({
 				position: Cesium.Cartesian3.fromDegrees(labelPos.longitude, labelPos.latitude, 0),
 				label: {
-					text: ent._djcxRoman || '',
+					text: ent._djcxLevelRoman || ent._djcxRoman || '',
 					font: 'bold 18px Microsoft YaHei',
 					fillColor: baseColor,
 					outlineColor: Cesium.Color.BLACK,
@@ -1110,7 +1160,6 @@ function djcxFormatDate(value) {
 function djcxBuildQueryResultProperties(entity, matchCount) {
 	const props = entity?._djcxProperties || {};
 	const out = {};
-	if (entity?._djcxRoman) out.序号 = entity._djcxRoman;
 
 	const nodeId = String(entity?._djcxNodeId ?? '');
 	const isNode26Or27 = nodeId === '26' || nodeId === '27';
@@ -1168,7 +1217,7 @@ function djcxBuildQueryResultProperties(entity, matchCount) {
 
 	if (matchCount != null) out.匹配数量 = matchCount;
 
-	if (hit || out.序号 || matchCount != null) return out;
+	if (hit || matchCount != null) return out;
 	return props;
 }
 
@@ -1189,7 +1238,7 @@ function djcxShowFeaturesInTable(entities, options = {}) {
 	const items = list.map((ent) => ({ ent, props: djcxBuildQueryResultProperties(ent) || {} }));
 	const rawNames = items.map((it, idx) => {
 		const p = it.props || {};
-		return String(p.地块编号 || p.序号 || p.项目名称 || `要素${idx + 1}`);
+		return String(p.地块编号 || p.项目名称 || `要素${idx + 1}`);
 	});
 	const nameCount = new Map();
 	const colNames = rawNames.map((n) => {

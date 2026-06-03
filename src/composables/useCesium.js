@@ -9,7 +9,7 @@
 import * as Cesium from 'cesium';
 import Tdt3dPlug from 'tdt-terrain-cesium-plugin';
 
-const TDT_TERRAIN_TOKEN = '96746f26024715426c81adb75118da38';
+const TDT_TERRAIN_TOKEN = '539153113b6e29d0d974db407e831022';
 const TDT_TERRAIN_URL = 'https://t{s}.tianditu.gov.cn/';
 const TDT_SUBDOMAINS = ['0', '1', '2', '3', '4', '5', '6', '7'];
 
