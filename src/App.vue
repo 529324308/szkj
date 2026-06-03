@@ -8,20 +8,27 @@
 -->
 <template>
   <Login v-if="!loggedIn" @success="onLoginSuccess" />
-  <CesiumMap v-else @logout="onLogout" />
-  
+  <template v-else>
+    <LoadingPage :visible="showLoading" :bg-image="loadingBgImage" />
+    <CesiumMap v-show="!showLoading" @logout="onLogout" @ready="onCesiumReady" />
+  </template>
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, computed } from 'vue';
 import CesiumMap from './components/CesiumMap.vue';
 import Login from './components/Login.vue';
+import LoadingPage from './components/LoadingPage.vue';
 import { isTokenValid, logout } from './api/auth';
 
 const loggedIn = ref(false);
+const showLoading = ref(false);
+const cesiumReady = ref(false);
+const loadingBgImage = computed(() => {
+  return new URL('./assets/jz_bg.png', import.meta.url).href;
+});
 
 onMounted(() => {
-  // 检查是否已有 token 且未过期
   if (isTokenValid()) {
     loggedIn.value = true;
   } else {
@@ -29,13 +36,22 @@ onMounted(() => {
   }
 });
 
-function onLoginSuccess(payload){
+function onLoginSuccess() {
   loggedIn.value = true;
+  showLoading.value = true;
+  cesiumReady.value = false;
+}
+
+function onCesiumReady() {
+  cesiumReady.value = true;
+  showLoading.value = false;
 }
 
 function onLogout() {
   logout();
   loggedIn.value = false;
+  showLoading.value = false;
+  cesiumReady.value = false;
 }
 </script>
 

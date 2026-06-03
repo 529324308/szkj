@@ -26,9 +26,13 @@ export function useCesium(containerId) {
 	);
 	let vecLayer;
 	let cvaLayer;
+	let imgLayer;
+	let ciaLayer;
 	// 保存 addImageryProvider 返回的 ImageryLayer 引用，便于移除
 	let vecImageryLayer = null;
 	let cvaImageryLayer = null;
+	let imgImageryLayer = null;
+	let ciaImageryLayer = null;
 	let tdtTerrainProvider = null;
 	let debugRuntimeRenderHandler = null;
 	let initialHomeCameraView = null;
@@ -62,75 +66,6 @@ export function useCesium(containerId) {
 	};
 
 	const REALTIME_LIGHTING_SYNC_INTERVAL_MS = 1000;
-	// #region debug-point A:tileset-runtime-helpers
-	const TILESET_DEBUG_ENABLED = import.meta.env?.VITE_TILESET_DEBUG === 'true';
-	const DEBUG_SERVER_URL = 'http://127.0.0.1:7778/event';
-	const DEBUG_SESSION_ID = 'tileset-camera-stutter';
-	const DEBUG_RUN_ID = 'post-fix';
-	const debugTilesetRuntime = {
-		lastFrameTs: 0,
-		lastReportTs: 0,
-		frameCount: 0,
-		slowFrameCount: 0,
-		lastCameraSnapshot: null,
-		progressReportByUrl: {},
-	};
-	const reportTilesetDebug = (hypothesisId, location, msg, data = {}) => {
-		if (!TILESET_DEBUG_ENABLED) return;
-		fetch(DEBUG_SERVER_URL, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({
-				sessionId: DEBUG_SESSION_ID,
-				runId: DEBUG_RUN_ID,
-				hypothesisId,
-				location,
-				msg: `[DEBUG] ${msg}`,
-				data,
-				ts: Date.now(),
-			}),
-		}).catch(() => {});
-	};
-	const getCameraSnapshot = () => {
-		if (!viewer?.camera) return null;
-		const position = viewer.camera.positionCartographic;
-		return {
-			longitude: Cesium.Math.toDegrees(position.longitude),
-			latitude: Cesium.Math.toDegrees(position.latitude),
-			height: position.height,
-			heading: viewer.camera.heading,
-			pitch: viewer.camera.pitch,
-			roll: viewer.camera.roll,
-		};
-	};
-	const getCameraMoveDelta = (current, previous) => {
-		if (!current || !previous) return null;
-		return {
-			longitudeDelta: Math.abs((current.longitude || 0) - (previous.longitude || 0)),
-			latitudeDelta: Math.abs((current.latitude || 0) - (previous.latitude || 0)),
-			heightDelta: Math.abs((current.height || 0) - (previous.height || 0)),
-			headingDelta: Math.abs((current.heading || 0) - (previous.heading || 0)),
-			pitchDelta: Math.abs((current.pitch || 0) - (previous.pitch || 0)),
-			rollDelta: Math.abs((current.roll || 0) - (previous.roll || 0)),
-		};
-	};
-	const getTilesetDebugStats = (tileset) => {
-		if (!tileset) return {};
-		return {
-			show: tileset.show,
-			maximumScreenSpaceError: tileset.maximumScreenSpaceError,
-			memoryAdjustedScreenSpaceError: tileset.memoryAdjustedScreenSpaceError,
-			totalMemoryUsageInBytes: tileset.totalMemoryUsageInBytes,
-			cacheBytes: tileset.cacheBytes,
-			maximumCacheOverflowBytes: tileset.maximumCacheOverflowBytes,
-			numberOfLoadedTilesTotal: tileset._statistics?.numberOfLoadedTilesTotal,
-			numberOfTilesWithContentReady: tileset._statistics?.numberOfTilesWithContentReady,
-			numberOfTilesVisited: tileset._statistics?.numberOfTilesVisited,
-			numberOfCommands: tileset._statistics?.numberOfCommands,
-			selectedTiles: tileset._selectedTiles?.length,
-		};
-	};
-	// #endregion
 
 	function createFallbackTerrainData(provider, x, y, level) {
 		const width = provider?._width || 64;
@@ -205,6 +140,18 @@ export function useCesium(containerId) {
 	function disableTerrain() {
 		if (!viewer) return;
 		viewer.terrainProvider = new Cesium.EllipsoidTerrainProvider();
+	}
+
+	function createTdtImageryProvider(layer) {
+		return new Cesium.WebMapTileServiceImageryProvider({
+			url: `https://t{s}.tianditu.gov.cn/${layer}_w/wmts?tk=${TDT_TERRAIN_TOKEN}`,
+			layer,
+			style: 'default',
+			format: 'tiles',
+			tileMatrixSetID: 'w',
+			subdomains: TDT_SUBDOMAINS,
+			maximumLevel: 18,
+		});
 	}
 
 	function clamp01(value) {
@@ -550,76 +497,20 @@ export function useCesium(containerId) {
 		});
 		// 隐藏版权信息
 		viewer._cesiumWidget._creditContainer.style.display = 'none';
-		// #region debug-point E:scene-init
-		if (TILESET_DEBUG_ENABLED) {
-			reportTilesetDebug('E', 'useCesium.js:initCesium', 'viewer initialized', {
-				requestRenderMode: viewer.scene.requestRenderMode,
-				maximumRenderTimeChange: viewer.scene.maximumRenderTimeChange,
-				useBrowserRecommendedResolution: viewer.useBrowserRecommendedResolution,
-				msaaSamples: viewer.scene.msaaSamples,
-			});
-			debugRuntimeRenderHandler = function() {
-				const now = performance.now();
-				if (debugTilesetRuntime.lastFrameTs) {
-					const frameMs = now - debugTilesetRuntime.lastFrameTs;
-					debugTilesetRuntime.frameCount += 1;
-					if (frameMs > 20) debugTilesetRuntime.slowFrameCount += 1;
-				}
-				debugTilesetRuntime.lastFrameTs = now;
-				if (now - debugTilesetRuntime.lastReportTs < 1000) return;
-				const currentCameraSnapshot = getCameraSnapshot();
-				const cameraDelta = getCameraMoveDelta(currentCameraSnapshot, debugTilesetRuntime.lastCameraSnapshot);
-				const cameraMoving = !!cameraDelta && (
-					cameraDelta.longitudeDelta > 1e-7 ||
-					cameraDelta.latitudeDelta > 1e-7 ||
-					cameraDelta.heightDelta > 0.5 ||
-					cameraDelta.headingDelta > 1e-4 ||
-					cameraDelta.pitchDelta > 1e-4 ||
-					cameraDelta.rollDelta > 1e-4
-				);
-				const frameCount = Math.max(debugTilesetRuntime.frameCount, 1);
-				reportTilesetDebug(cameraMoving ? 'A' : 'D', 'useCesium.js:initCesium:postRender', 'scene runtime sample', {
-					fpsApprox: Number((1000 / ((now - (debugTilesetRuntime.lastReportTs || now - 1000)) / frameCount)).toFixed(2)),
-					slowFrameRatio: Number((debugTilesetRuntime.slowFrameCount / frameCount).toFixed(3)),
-					cameraMoving,
-					camera: currentCameraSnapshot,
-					cameraDelta,
-					primitivesLength: viewer.scene.primitives.length,
-					dataSourceLength: viewer.dataSources.length,
-					requestRenderMode: viewer.scene.requestRenderMode,
-				});
-				debugTilesetRuntime.lastReportTs = now;
-				debugTilesetRuntime.frameCount = 0;
-				debugTilesetRuntime.slowFrameCount = 0;
-				debugTilesetRuntime.lastCameraSnapshot = currentCameraSnapshot;
-			};
-			viewer.scene.postRender.addEventListener(debugRuntimeRenderHandler);
-		}
-		// #endregion
 		// 调整地图对比度
 		const imageryLayer = viewer.imageryLayers.get(0); // 获取第一个图层
 		// imageryLayer.brightness = 0.3; // 设置亮度，值越小颜色越暗
 		// 初始化后的相机飞行逻辑已抽成 flyToOnLeaveHome()，用于“从首页切到其他页面”时与 UI 动画同步启动。
 
 		// 矢量底图（路网）
-		vecLayer = new Cesium.WebMapTileServiceImageryProvider({
-		    url: 'http://t0.tianditu.gov.cn/vec_w/wmts?tk=' + TDT_TERRAIN_TOKEN,
-		    layer: 'vec',
-		    style: 'default',
-		    format: 'tiles',
-		    tileMatrixSetID: 'w',
-		    maximumLevel: 18
-		});
+		vecLayer = createTdtImageryProvider('vec');
 
 		// 矢量注记（中文标注）
-		cvaLayer = new Cesium.WebMapTileServiceImageryProvider({
-			url: 'http://t0.tianditu.gov.cn/cva_w/wmts?tk=' + TDT_TERRAIN_TOKEN,
-			layer: 'cva',
-			style: 'default',
-			format: 'tiles',
-			tileMatrixSetID: 'w',
-			maximumLevel: 18
-		});
+		cvaLayer = createTdtImageryProvider('cva');
+
+		// 澶╁湴鍥惧奖鍍忓簳鍥惧拰娉ㄨ
+		imgLayer = createTdtImageryProvider('img');
+		ciaLayer = createTdtImageryProvider('cia');
 
 		// 默认关闭地形，按需切换到网络地形
 		disableTerrain();
@@ -637,6 +528,7 @@ export function useCesium(containerId) {
 		if (!vecImageryLayer) {
 			vecImageryLayer = viewer.imageryLayers.addImageryProvider(vecLayer);
 		}
+		viewer.scene.requestRender();
 	}
 	// 添加矢量注记
 	function addCvaLayer(){
@@ -644,6 +536,7 @@ export function useCesium(containerId) {
 		if (!cvaImageryLayer) {
 			cvaImageryLayer = viewer.imageryLayers.addImageryProvider(cvaLayer);
 		}
+		viewer.scene.requestRender();
 	}
 
 	// 删除矢量底图
@@ -751,13 +644,6 @@ export function useCesium(containerId) {
 				// 模型隐藏时不预加载，避免额外资源浪费
 				preloadWhenHidden: options.preloadWhenHidden ?? false,
 			};
-			// #region debug-point B:tileset-load-start
-			reportTilesetDebug('B', 'useCesium.js:add3DTileset:start', 'tileset load requested', {
-				url,
-				options: tilesetLoadOptions,
-			});
-			// #endregion
-
 			let tileset = await Cesium.Cesium3DTileset.fromUrl(url, {
 				...tilesetLoadOptions,
 			});
@@ -787,18 +673,9 @@ export function useCesium(containerId) {
 			};
 			const removeMoveStartListener = viewer.camera.moveStart.addEventListener(() => {
 				applyMovingDetailStrategy();
-				reportTilesetDebug('B', 'useCesium.js:add3DTileset:moveStart', 'camera move start, relax tileset detail', {
-					url,
-					maximumScreenSpaceError: movingMaximumScreenSpaceError,
-				});
 			});
 			const removeMoveEndListener = viewer.camera.moveEnd.addEventListener(() => {
 				applyIdleDetailStrategy();
-				reportTilesetDebug('B', 'useCesium.js:add3DTileset:moveEnd', 'camera move end, restore tileset detail', {
-					url,
-					maximumScreenSpaceError: idleMaximumScreenSpaceError,
-					restoreDetailDelayMs,
-				});
 			});
 			tileset._cameraAdaptiveCleanup = () => {
 				if (restoreDetailTimer) {
@@ -809,33 +686,6 @@ export function useCesium(containerId) {
 				if (typeof removeMoveEndListener === 'function') removeMoveEndListener();
 			};
 			applyIdleDetailStrategy();
-			// #region debug-point C:tileset-runtime-events
-			reportTilesetDebug('C', 'useCesium.js:add3DTileset:ready', 'tileset added to scene', {
-				url,
-				backFaceCulling: tileset.backFaceCulling,
-				stats: getTilesetDebugStats(tileset),
-			});
-			tileset.loadProgress?.addEventListener((numberOfPendingRequests, numberOfTilesProcessing) => {
-				const now = Date.now();
-				const lastTs = debugTilesetRuntime.progressReportByUrl[url] || 0;
-				if (now - lastTs < 800) return;
-				debugTilesetRuntime.progressReportByUrl[url] = now;
-				reportTilesetDebug('C', 'useCesium.js:add3DTileset:loadProgress', 'tileset load progress', {
-					url,
-					numberOfPendingRequests,
-					numberOfTilesProcessing,
-					stats: getTilesetDebugStats(tileset),
-					camera: getCameraSnapshot(),
-				});
-			});
-			tileset.allTilesLoaded?.addEventListener(() => {
-				reportTilesetDebug('C', 'useCesium.js:add3DTileset:allTilesLoaded', 'tileset all tiles loaded', {
-					url,
-					stats: getTilesetDebugStats(tileset),
-					camera: getCameraSnapshot(),
-				});
-			});
-			// #endregion
 
 			// 设置样式（颜色和透明度）
 			if (options.color || options.alpha !== undefined) {

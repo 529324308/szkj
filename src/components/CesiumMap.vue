@@ -13,7 +13,45 @@
 					{{ tab.label }}
 				</div>
 			</div>
-			<div class="acction">{{ currentUserName }}</div>
+			<div class="btn-wrapper bt-ai-btn-wrapper">
+				<button
+					ref="headerAiButtonRef"
+					class="btn bt-ai-btn"
+					:class="{ 'is-open': aiChatVisible, 'is-busy': aiChatAnimating }"
+					type="button"
+					@click="toggleAiAssistantFromHeader"
+				>
+					<svg class="btn-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+						<path
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456ZM16.894 20.567 16.5 21.75l-.394-1.183a2.25 2.25 0 0 0-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 0 0 1.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 0 0 1.423 1.423l1.183.394-1.183.394a2.25 2.25 0 0 0-1.423 1.423Z"
+						></path>
+					</svg>
+					<span class="txt-wrapper">
+						<span class="txt-1">
+							<span class="btn-letter">A</span>
+							<span class="btn-letter">I</span>
+							<span class="btn-letter">C</span>
+							<span class="btn-letter">H</span>
+							<span class="btn-letter">A</span>
+							<span class="btn-letter">T</span>
+						</span>
+						<span class="txt-2">
+							<span class="btn-letter">O</span>
+							<span class="btn-letter">P</span>
+							<span class="btn-letter">E</span>
+							<span class="btn-letter">N</span>
+							<span class="btn-letter">.</span>
+							<span class="btn-letter">.</span>
+							<span class="btn-letter">.</span>
+						</span>
+					</span>
+				</button>
+			</div>
+			<div class="bt-right">
+				<div class="acction" :title="currentUserName">{{ currentUserName }}</div>
+			</div>
 			<div class="dianyuan" @click="confirmLogout"></div>
 		</div>
 
@@ -255,6 +293,7 @@
 <script setup>
 import { onMounted, onBeforeUnmount, ref, reactive, watch, toRaw, computed, nextTick } from 'vue';
 import * as Cesium from 'cesium';
+import { gsap } from 'gsap';
 import { centroid as turfCentroid, polygon as turfPolygon } from '@turf/turf';
 import proj4 from 'proj4';
 import { useCesium } from '../composables/useCesium';
@@ -269,7 +308,7 @@ import SmartAnalysis from './map/SmartAnalysis.vue';
 import DataManagement from './map/DataManagement.vue';
 import PersonalCenter from './map/PersonalCenter.vue';
 
-const emit = defineEmits(['logout']);
+const emit = defineEmits(['logout', 'ready']);
 const TERRAIN_INPUT_STORAGE_KEY = 'terrainInputUrl';
 const TERRAIN_NAME_STORAGE_KEY = 'terrainInputName';
 const MESSAGE_OFFSET_TOP = 200;
@@ -307,6 +346,14 @@ const icons = {
 	shp: new URL('../assets/shp.png', import.meta.url).href,
 	kml: new URL('../assets/_KML.png', import.meta.url).href,
 	cad: new URL('../assets/CAD.png', import.meta.url).href,
+	add: new URL('../assets/ai机器人.png', import.meta.url).href,
+	chat: new URL('../assets/ai机器人.png', import.meta.url).href,
+	delete: new URL('../assets/垃圾桶.png', import.meta.url).href,
+	menu: new URL('../assets/九宫格.png', import.meta.url).href,
+	sidebarOpen: new URL('../assets/打开边栏.png', import.meta.url).href,
+	sidebarClose: new URL('../assets/关闭边栏.png', import.meta.url).href,
+	newChat: new URL('../assets/发起新对话.png', import.meta.url).href,
+	searchChat: new URL('../assets/搜索对话内容.png', import.meta.url).href,
 };
 
 const containerId = 'cesiumContainer';
@@ -348,6 +395,7 @@ const activeTopTab = ref(topTabs[0].key);
 const activeTool = ref(null);
 
 const currentUserName = ref(localStorage.getItem('userName') || '未知用户');
+const AI_DRAG_NO_SELECT_CLASS = 'ai-chat-no-select';
 
 // 地价查询数据
 const list = ref([]);
@@ -377,9 +425,12 @@ const aiChatInput = ref('');
 const aiChatMessages = ref([{ role: 'assistant', text: '你好，我是AI助手，有什么需要帮助？' }]);
 const aiChatMaximized = ref(true);
 const aiChatDragging = ref(false);
+const aiChatAnimating = ref(false);
 const aiChatTop = ref(null);
 const aiChatLeft = ref(null);
 const smartAnalysisRef = ref(null);
+const headerAiButtonRef = ref(null);
+let aiChatTimeline = null;
 
 // 地图状态
 const mouseCoords = ref({ longitude: null, latitude: null, height: null });
@@ -2606,15 +2657,10 @@ function resetDrawing() {
 
 function startTool(type) {
 	if (type === 'ai') {
-		if (activeTool.value === 'ai') {
-			aiChatVisible.value = false;
-			activeTool.value = null;
-		} else {
-			aiChatVisible.value = true;
-			aiChatMaximized.value = true;
-			activeTool.value = 'ai';
-			nextTick(() => scrollAiBottom());
-		}
+		aiChatVisible.value = true;
+		aiChatMaximized.value = true;
+		activeTool.value = 'ai';
+		nextTick(() => scrollAiBottom());
 		return;
 	}
 
@@ -3851,26 +3897,317 @@ function closeInfoPanel() {
 }
 
 // AI 相关
-function closeAiChat() { aiChatVisible.value = false; }
+function closeAiChat() {
+	if (aiChatAnimating.value) return;
+	animateAiChatCloseToHeader();
+}
 function scrollAiBottom() { nextTick(() => { const el = smartAnalysisRef.value?.aiChatBodyRef; if (el) el.scrollTop = el.scrollHeight; }); }
-function toggleAiChatSize() { aiChatMaximized.value = !aiChatMaximized.value; scrollAiBottom(); }
+function toggleAiChatSize() {
+	if (aiChatAnimating.value) return;
+	onAiDragEnd();
+	aiChatMaximized.value = !aiChatMaximized.value;
+	scrollAiBottom();
+}
+
+function setGlobalTextSelectionLocked(locked) {
+	if (typeof document === 'undefined') return;
+	document.body.classList.toggle(AI_DRAG_NO_SELECT_CLASS, locked);
+}
+
 function onAiDragStart(e) {
+	if (aiChatAnimating.value) return;
 	if (aiChatMaximized.value) return;
 	const el = smartAnalysisRef.value?.aiChatPanelRef;
 	if (!el) return;
 	const point = e.touches ? e.touches[0] : e;
 	const rect = el.getBoundingClientRect();
 	aiChatDragging.value = true;
+	setGlobalTextSelectionLocked(true);
 	aiDragStart.value = { clientX: point.clientX, clientY: point.clientY, originTop: rect.top, originLeft: rect.left };
 	window.addEventListener('mousemove', onAiDragging); window.addEventListener('mouseup', onAiDragEnd);
 }
 function onAiDragging(e) {
 	if (!aiChatDragging.value) return;
 	const point = e.touches ? e.touches[0] : e;
-	aiChatTop.value = aiDragStart.value.originTop + (point.clientY - aiDragStart.value.clientY);
-	aiChatLeft.value = aiDragStart.value.originLeft + (point.clientX - aiDragStart.value.clientX);
+	const el = smartAnalysisRef.value?.aiChatPanelRef;
+	const panelWidth = el?.offsetWidth || 420;
+	const panelHeight = el?.offsetHeight || 620;
+	const viewportWidth = window.innerWidth;
+	const viewportHeight = window.innerHeight;
+	const minLeft = 10;
+	const minTop = 70;
+	const maxLeft = Math.max(minLeft, viewportWidth - panelWidth - 10);
+	const maxTop = Math.max(minTop, viewportHeight - panelHeight - 10);
+	const nextTop = aiDragStart.value.originTop + (point.clientY - aiDragStart.value.clientY);
+	const nextLeft = aiDragStart.value.originLeft + (point.clientX - aiDragStart.value.clientX);
+	aiChatTop.value = Math.min(Math.max(nextTop, minTop), maxTop);
+	aiChatLeft.value = Math.min(Math.max(nextLeft, minLeft), maxLeft);
 }
-function onAiDragEnd() { aiChatDragging.value = false; window.removeEventListener('mousemove', onAiDragging); window.removeEventListener('mouseup', onAiDragEnd); }
+function onAiDragEnd() {
+	aiChatDragging.value = false;
+	setGlobalTextSelectionLocked(false);
+	window.removeEventListener('mousemove', onAiDragging);
+	window.removeEventListener('mouseup', onAiDragEnd);
+}
+function hideAiChatImmediately() {
+	onAiDragEnd();
+	aiChatVisible.value = false;
+	if (activeTool.value === 'ai') {
+		activeTool.value = null;
+	}
+}
+function killAiChatTimeline(clearStyles = false) {
+	if (aiChatTimeline) {
+		aiChatTimeline.kill();
+		aiChatTimeline = null;
+	}
+	if (!clearStyles) return;
+	const panel = smartAnalysisRef.value?.aiChatPanelRef;
+	const sidebar = smartAnalysisRef.value?.chatHistorySidebarRef;
+	const main = smartAnalysisRef.value?.aiChatMainRef;
+	const header = smartAnalysisRef.value?.aiChatHeaderRef;
+	if (panel) {
+		gsap.set(panel, { clearProps: 'transform,transformOrigin,transformPerspective,opacity,filter,borderRadius,boxShadow,pointerEvents,willChange' });
+	}
+	if (sidebar) {
+		gsap.set(sidebar, { clearProps: 'transform,opacity,filter,willChange' });
+	}
+	if (main) {
+		gsap.set(main, { clearProps: 'transform,opacity,filter,willChange' });
+	}
+	if (header) {
+		gsap.set(header, { clearProps: 'width,maxWidth,minWidth,opacity,filter,willChange' });
+	}
+}
+function getAiChatAnimationNodes() {
+	return {
+		panel: smartAnalysisRef.value?.aiChatPanelRef || null,
+		sidebar: smartAnalysisRef.value?.chatHistorySidebarRef || null,
+		main: smartAnalysisRef.value?.aiChatMainRef || null,
+		header: smartAnalysisRef.value?.aiChatHeaderRef || null,
+	};
+}
+function getElementRect(el) {
+	if (!el?.getBoundingClientRect) return null;
+	const rect = el.getBoundingClientRect();
+	if (!rect.width || !rect.height) return null;
+	return rect;
+}
+function getAiLaunchGeometry() {
+	const buttonRect = getElementRect(headerAiButtonRef.value);
+	const panelRect = getElementRect(smartAnalysisRef.value?.aiChatPanelRef);
+	if (!buttonRect || !panelRect) return null;
+	const panelCenterX = panelRect.left + panelRect.width / 2;
+	const panelCenterY = panelRect.top + panelRect.height / 2;
+	const buttonCenterX = buttonRect.left + buttonRect.width / 2;
+	const buttonCenterY = buttonRect.top + buttonRect.height / 2;
+	return {
+		x: Math.round(buttonCenterX - panelCenterX),
+		y: Math.round(buttonCenterY - panelCenterY),
+		scaleX: Math.max(0.08, buttonRect.width / panelRect.width),
+		scaleY: Math.max(0.08, buttonRect.height / panelRect.height),
+		headerWidth: Math.max(88, Math.round(buttonRect.width + 18)),
+		borderRadius: 24,
+	};
+}
+function nextAnimationFrame() {
+	return new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
+}
+async function toggleAiAssistantFromHeader() {
+	if (aiChatAnimating.value) return;
+	if (aiChatVisible.value) {
+		await animateAiChatCloseToHeader();
+		return;
+	}
+	await animateAiChatOpenFromHeader();
+}
+async function animateAiChatOpenFromHeader() {
+	killAiChatTimeline(true);
+	aiChatAnimating.value = true;
+	aiChatMaximized.value = true;
+	startTool('ai');
+	await nextTick();
+	await nextAnimationFrame();
+
+	const { panel, sidebar, main, header } = getAiChatAnimationNodes();
+	const geometry = getAiLaunchGeometry();
+	if (!panel || !geometry) {
+		aiChatAnimating.value = false;
+		scrollAiBottom();
+		return;
+	}
+
+	gsap.set(panel, {
+		transformOrigin: '50% 50%',
+		transformPerspective: 1400,
+		x: geometry.x,
+		y: geometry.y,
+		scaleX: geometry.scaleX,
+		scaleY: geometry.scaleY,
+		skewX: -12,
+		skewY: 3,
+		rotateX: -18,
+		autoAlpha: 0.9,
+		filter: 'blur(10px) saturate(1.12)',
+		borderRadius: geometry.borderRadius,
+		boxShadow: '0 10px 28px rgba(15, 23, 42, 0.16)',
+		willChange: 'transform, opacity, filter, border-radius, box-shadow',
+	});
+	if (sidebar) {
+		gsap.set(sidebar, {
+			x: -40,
+			autoAlpha: 0,
+			filter: 'blur(12px)',
+			willChange: 'transform, opacity, filter',
+		});
+	}
+	if (main) {
+		gsap.set(main, {
+			y: 26,
+			scale: 1.035,
+			autoAlpha: 0,
+			filter: 'blur(12px)',
+			willChange: 'transform, opacity, filter',
+		});
+	}
+	if (header) {
+		gsap.set(header, {
+			width: '100%',
+			maxWidth: '100%',
+			minWidth: '100%',
+			willChange: 'width, opacity, filter',
+		});
+	}
+
+	aiChatTimeline = gsap.timeline({
+		defaults: { overwrite: 'auto' },
+		onComplete: () => {
+			killAiChatTimeline(true);
+			aiChatAnimating.value = false;
+			scrollAiBottom();
+		},
+	});
+
+	aiChatTimeline.to(panel, {
+		x: 0,
+		y: 0,
+		scaleX: 1,
+		scaleY: 1,
+		skewX: 0,
+		skewY: 0,
+		rotateX: 0,
+		autoAlpha: 1,
+		filter: 'blur(0px) saturate(1)',
+		borderRadius: 22,
+		boxShadow: '0 26px 64px rgba(15, 23, 42, 0.2)',
+		duration: 0.72,
+		ease: 'expo.out',
+	});
+	if (sidebar) {
+		aiChatTimeline.to(sidebar, {
+			x: 0,
+			autoAlpha: 1,
+			filter: 'blur(0px)',
+			duration: 0.5,
+			ease: 'power3.out',
+		}, 0.12);
+	}
+	if (main) {
+		aiChatTimeline.to(main, {
+			y: 0,
+			scale: 1,
+			autoAlpha: 1,
+			filter: 'blur(0px)',
+			duration: 0.54,
+			ease: 'power3.out',
+		}, 0.16);
+	}
+}
+async function animateAiChatCloseToHeader() {
+	killAiChatTimeline(true);
+	const { panel, sidebar, main, header } = getAiChatAnimationNodes();
+	const geometry = getAiLaunchGeometry();
+	if (!panel || !geometry) {
+		hideAiChatImmediately();
+		return;
+	}
+
+	aiChatAnimating.value = true;
+	onAiDragEnd();
+
+	aiChatTimeline = gsap.timeline({
+		defaults: { overwrite: 'auto' },
+		onComplete: () => {
+			killAiChatTimeline(true);
+			hideAiChatImmediately();
+			aiChatAnimating.value = false;
+		},
+	});
+
+	if (sidebar) {
+		aiChatTimeline.to(sidebar, {
+			x: -22,
+			autoAlpha: 0,
+			filter: 'blur(8px)',
+			duration: 0.22,
+			ease: 'power2.inOut',
+		}, 0);
+	}
+	if (main) {
+		aiChatTimeline.to(main, {
+			y: -12,
+			scale: 0.992,
+			autoAlpha: 0,
+			filter: 'blur(8px)',
+			duration: 0.26,
+			ease: 'power2.inOut',
+		}, 0);
+	}
+	if (header) {
+		const headerRect = header.getBoundingClientRect();
+		const headerStartWidth = Math.round(headerRect.width || panel.getBoundingClientRect().width || 0);
+		if (headerStartWidth > 0) {
+			gsap.set(header, {
+				width: headerStartWidth,
+				maxWidth: headerStartWidth,
+				minWidth: headerStartWidth,
+			});
+		}
+		aiChatTimeline.to(header, {
+			width: geometry.headerWidth,
+			maxWidth: geometry.headerWidth,
+			minWidth: geometry.headerWidth,
+			autoAlpha: 1,
+			filter: 'blur(0px)',
+			duration: 0.28,
+			ease: 'power3.inOut',
+		}, 0);
+		aiChatTimeline.to(header, {
+			autoAlpha: 0,
+			filter: 'blur(6px)',
+			duration: 0.14,
+			ease: 'power2.out',
+		}, 0.02);
+	}
+	aiChatTimeline.to(panel, {
+		autoAlpha: 0,
+		duration: 0.34,
+		ease: 'power2.out',
+	}, 0.02);
+	aiChatTimeline.to(panel, {
+		transformOrigin: '50% 50%',
+		transformPerspective: 1400,
+		x: geometry.x,
+		y: geometry.y,
+		scaleX: geometry.scaleX,
+		scaleY: geometry.scaleY,
+		filter: 'blur(14px) saturate(1.02)',
+		borderRadius: geometry.borderRadius,
+		boxShadow: '0 8px 20px rgba(15, 23, 42, 0.08)',
+		duration: 0.54,
+		ease: 'expo.inOut',
+	}, 0.02);
+}
 async function sendAiMessage() {
 	if (!aiChatInput.value.trim()) return;
 	aiChatMessages.value.push({ role: 'user', text: aiChatInput.value });
@@ -3880,6 +4217,75 @@ async function sendAiMessage() {
 
 const aiDragStart = ref({});
 
+// 监听地球瓦片加载完成
+function watchGlobeReady() {
+	const viewer = getViewer();
+	if (!viewer) return;
+
+	let readyEmitted = false;
+
+	const checkReady = () => {
+		if (readyEmitted) return;
+
+		const scene = viewer.scene;
+		const globe = scene.globe;
+
+		// 检查所有 imageryLayer 是否都已加载
+		const layers = scene.imageryLayers;
+		let allLoaded = true;
+
+		for (let i = 0; i < layers.length; i++) {
+			const layer = layers.get(i);
+			if (layer && layer.isLoading) {
+				allLoaded = false;
+				break;
+			}
+		}
+
+		// 检查 globe 是否完成表面加载
+		if (allLoaded && globe && !globe.ready) {
+			allLoaded = false;
+		}
+
+		// 同时检查 terrainProvider 是否准备好
+		if (allLoaded && globe && globe.terrainProvider) {
+			const tp = globe.terrainProvider;
+			if (typeof tp.ready === 'boolean' && !tp.ready) {
+				allLoaded = false;
+			}
+		}
+
+		if (allLoaded) {
+			readyEmitted = true;
+			emit('ready');
+			console.log('[CesiumMap] Globe ready, emitting ready event');
+		}
+	};
+
+	// 使用 postRender 持续检查加载状态
+	const postRenderHandler = () => {
+		checkReady();
+	};
+
+	// 初始延迟检查（等待图层初始化）
+	setTimeout(() => {
+		checkReady();
+		if (!readyEmitted) {
+			viewer.scene.postRender.addEventListener(postRenderHandler);
+		}
+	}, 500);
+
+	// 超时保护：10秒后强制触发
+	setTimeout(() => {
+		if (!readyEmitted) {
+			readyEmitted = true;
+			emit('ready');
+			console.log('[CesiumMap] Globe ready timeout, force emitting ready event');
+		}
+		viewer.scene.postRender.removeEventListener(postRenderHandler);
+	}, 10000);
+}
+
 onMounted(async () => {
 	// 加载地价查询图层
 	// list.value = await getLandPriceLayers();
@@ -3888,6 +4294,10 @@ onMounted(async () => {
 	homeUiVisible.value = true;
 	homeSidebarEntering.value = false;
 	await enterHomeScene({ duration: 0 });
+
+	// 监听地球瓦片加载完成
+	watchGlobeReady();
+
 	addClickHandler(handleMapClick, {
 		shouldHandle: (payload) => {
 			if (payload?.type === 'entity' && payload?.entity?._measureData) return true;
@@ -3913,6 +4323,8 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+	killAiChatTimeline();
+	onAiDragEnd();
 	removeClickHandler(); removeMouseMoveHandler(); removeHeadingUpdateHandler(); removeScaleUpdateHandler();
 	window.removeEventListener('resize', onShpFeaturePopupResize);
 	window.removeEventListener('pointermove', onShpFeatureHeaderPointerMove);
@@ -3938,6 +4350,10 @@ function confirmLogout() {
 		.catch(() => {
 			// 取消退出
 		});
+}
+
+async function openAiAssistantFromHeader() {
+	await toggleAiAssistantFromHeader();
 }
 
 function openTerrainPanel() {
@@ -4602,6 +5018,11 @@ async function clearAllMeasures() {
 </script>
 
 <style scoped>
+:global(body.ai-chat-no-select) {
+	user-select: none;
+	-webkit-user-select: none;
+}
+
 .cesium-box {
 	position: absolute;
 	top: 0; left: 0; right: 0; bottom: 0;
@@ -4634,13 +5055,26 @@ async function clearAllMeasures() {
 	color: #a3a3a3;
 }
 
-.acction {
+.bt-right {
 	position: absolute;
 	right: 60px;
-	top: 0;
+	top: 0px;
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	max-width: 100px;
+	overflow: hidden;
+}
+
+.acction {
+	min-width: 0;
+	max-width: 120px;
 	line-height: 50px;
 	font-size: 14px;
 	color: #fff;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
 }
 
 .dianyuan {
@@ -4657,6 +5091,358 @@ async function clearAllMeasures() {
 
 .dianyuan:hover {
 	background-color: #f78989;
+}
+
+.btn-wrapper {
+	position: absolute;
+	top: 50%;
+	transform: translateY(-20%);
+	right: 180px;
+}
+
+.bt-ai-btn-wrapper {
+	flex: 0 0 auto;
+}
+
+.bt-ai-btn {
+	position: relative;
+	top: -10px;
+	--border-radius: 24px;
+	--padding: 4px;
+	--transition: 0.4s;
+	--button-color: #101010;
+	--highlight-color-hue: 210deg;
+	user-select: none;
+	display: flex;
+	justify-content: center;
+	align-items: center;
+	padding: 0.42em 0.75em 0.42em 1em;
+	font-family: "Poppins", "Inter", "Segoe UI", sans-serif;
+	font-size: 13px;
+	font-weight: 400;
+	background-color: var(--button-color);
+	box-shadow:
+		inset 0px 1px 1px rgba(255, 255, 255, 0.2),
+		inset 0px 2px 2px rgba(255, 255, 255, 0.15),
+		inset 0px 4px 4px rgba(255, 255, 255, 0.1),
+		inset 0px 8px 8px rgba(255, 255, 255, 0.05),
+		inset 0px 16px 16px rgba(255, 255, 255, 0.05),
+		0px -1px 1px rgba(0, 0, 0, 0.02),
+		0px -2px 2px rgba(0, 0, 0, 0.03),
+		0px -4px 4px rgba(0, 0, 0, 0.05),
+		0px -8px 8px rgba(0, 0, 0, 0.06),
+		0px -16px 16px rgba(0, 0, 0, 0.08);
+	border: solid 1px #fff2;
+	border-radius: var(--border-radius);
+	cursor: pointer;
+	transition:
+		box-shadow var(--transition),
+		border var(--transition),
+		background-color var(--transition),
+		transform 0.22s ease,
+		opacity 0.22s ease;
+}
+
+.bt-ai-btn::before {
+	content: "";
+	position: absolute;
+	top: calc(0px - var(--padding));
+	left: calc(0px - var(--padding));
+	width: calc(100% + var(--padding) * 2);
+	height: calc(100% + var(--padding) * 2);
+	border-radius: calc(var(--border-radius) + var(--padding));
+	pointer-events: none;
+	background-image: linear-gradient(0deg, #0004, #000a);
+	z-index: -1;
+	transition:
+		box-shadow var(--transition),
+		filter var(--transition);
+	box-shadow:
+		0 -8px 8px -6px #0000 inset,
+		0 -16px 16px -8px #00000000 inset,
+		1px 1px 1px #fff2,
+		2px 2px 2px #fff1,
+		-1px -1px 1px #0002,
+		-2px -2px 2px #0001;
+}
+
+.bt-ai-btn::after {
+	content: "";
+	position: absolute;
+	top: 0;
+	left: 0;
+	width: 100%;
+	height: 100%;
+	border-radius: inherit;
+	pointer-events: none;
+	background-image: linear-gradient(
+		0deg,
+		#fff,
+		hsl(var(--highlight-color-hue), 100%, 70%),
+		hsla(var(--highlight-color-hue), 100%, 70%, 50%),
+		8%,
+		transparent
+	);
+	background-position: 0 0;
+	opacity: 0;
+	transition:
+		opacity var(--transition),
+		filter var(--transition);
+}
+
+.btn-letter {
+	position: relative;
+	display: inline-block;
+	color: #fff5;
+	animation: letter-anim 2s ease-in-out infinite;
+	transition:
+		color var(--transition),
+		text-shadow var(--transition),
+		opacity var(--transition);
+}
+
+@keyframes letter-anim {
+	50% {
+		text-shadow: 0 0 3px #fff8;
+		color: #fff;
+	}
+}
+
+.btn-svg {
+	flex-grow: 1;
+	height: 18px;
+	width: 18px;
+	margin-right: 0.45rem;
+	fill: #e8e8e8;
+	animation: flicker 2s linear infinite;
+	animation-delay: 0.5s;
+	filter: drop-shadow(0 0 2px #fff9);
+	transition:
+		fill var(--transition),
+		filter var(--transition),
+		opacity var(--transition);
+}
+
+@keyframes flicker {
+	50% {
+		opacity: 0.3;
+	}
+}
+
+.txt-wrapper {
+	position: relative;
+	display: flex;
+	align-items: center;
+	min-width: 4.2em;
+}
+
+.txt-1,
+.txt-2 {
+	position: absolute;
+	word-spacing: -1em;
+}
+
+.txt-1 {
+	animation: appear-anim 1s ease-in-out forwards;
+}
+
+.txt-2 {
+	opacity: 0;
+}
+
+@keyframes appear-anim {
+	0% {
+		opacity: 0;
+	}
+	100% {
+		opacity: 1;
+	}
+}
+
+.bt-ai-btn:focus .txt-1 {
+	animation: opacity-anim 0.3s ease-in-out forwards;
+	animation-delay: 1s;
+}
+
+.bt-ai-btn:focus .txt-2 {
+	animation: opacity-anim 0.3s ease-in-out reverse forwards;
+	animation-delay: 1s;
+}
+
+@keyframes opacity-anim {
+	0% {
+		opacity: 1;
+	}
+	100% {
+		opacity: 0;
+	}
+}
+
+.bt-ai-btn:focus .btn-letter {
+	animation:
+		focused-letter-anim 1s ease-in-out forwards,
+		letter-anim 1.2s ease-in-out infinite;
+	animation-delay: 0s, 1s;
+}
+
+@keyframes focused-letter-anim {
+	0%,
+	100% {
+		filter: blur(0px);
+	}
+	50% {
+		transform: scale(2);
+		filter: blur(10px) brightness(150%)
+			drop-shadow(-36px 12px 12px hsl(var(--highlight-color-hue), 100%, 70%));
+	}
+}
+
+.bt-ai-btn:focus .btn-svg {
+	animation-duration: 1.2s;
+	animation-delay: 0.2s;
+}
+
+.bt-ai-btn:focus::before {
+	box-shadow:
+		0 -8px 12px -6px #fff3 inset,
+		0 -16px 16px -8px hsla(var(--highlight-color-hue), 100%, 70%, 20%) inset,
+		1px 1px 1px #fff3,
+		2px 2px 2px #fff1,
+		-1px -1px 1px #0002,
+		-2px -2px 2px #0001;
+}
+
+.bt-ai-btn:focus::after {
+	opacity: 0.6;
+	mask-image: linear-gradient(0deg, #fff, transparent);
+	filter: brightness(100%);
+}
+
+.btn-letter:nth-child(1),
+.bt-ai-btn:focus .btn-letter:nth-child(1) {
+	animation-delay: 0s;
+}
+
+.btn-letter:nth-child(2),
+.bt-ai-btn:focus .btn-letter:nth-child(2) {
+	animation-delay: 0.08s;
+}
+
+.btn-letter:nth-child(3),
+.bt-ai-btn:focus .btn-letter:nth-child(3) {
+	animation-delay: 0.16s;
+}
+
+.btn-letter:nth-child(4),
+.bt-ai-btn:focus .btn-letter:nth-child(4) {
+	animation-delay: 0.24s;
+}
+
+.btn-letter:nth-child(5),
+.bt-ai-btn:focus .btn-letter:nth-child(5) {
+	animation-delay: 0.32s;
+}
+
+.btn-letter:nth-child(6),
+.bt-ai-btn:focus .btn-letter:nth-child(6) {
+	animation-delay: 0.4s;
+}
+
+.btn-letter:nth-child(7),
+.bt-ai-btn:focus .btn-letter:nth-child(7) {
+	animation-delay: 0.48s;
+}
+
+.btn-letter:nth-child(8),
+.bt-ai-btn:focus .btn-letter:nth-child(8) {
+	animation-delay: 0.56s;
+}
+
+.btn-letter:nth-child(9),
+.bt-ai-btn:focus .btn-letter:nth-child(9) {
+	animation-delay: 0.64s;
+}
+
+.btn-letter:nth-child(10),
+.bt-ai-btn:focus .btn-letter:nth-child(10) {
+	animation-delay: 0.72s;
+}
+
+.btn-letter:nth-child(11),
+.bt-ai-btn:focus .btn-letter:nth-child(11) {
+	animation-delay: 0.8s;
+}
+
+.btn-letter:nth-child(12),
+.bt-ai-btn:focus .btn-letter:nth-child(12) {
+	animation-delay: 0.88s;
+}
+
+.btn-letter:nth-child(13),
+.bt-ai-btn:focus .btn-letter:nth-child(13) {
+	animation-delay: 0.96s;
+}
+
+.bt-ai-btn:active {
+	border: solid 1px hsla(var(--highlight-color-hue), 100%, 80%, 70%);
+	background-color: hsla(var(--highlight-color-hue), 50%, 20%, 0.5);
+}
+
+.bt-ai-btn:active::before {
+	box-shadow:
+		0 -8px 12px -6px #fffa inset,
+		0 -16px 16px -8px hsla(var(--highlight-color-hue), 100%, 70%, 80%) inset,
+		1px 1px 1px #fff4,
+		2px 2px 2px #fff2,
+		-1px -1px 1px #0002,
+		-2px -2px 2px #0001;
+}
+
+.bt-ai-btn:active::after {
+	opacity: 1;
+	mask-image: linear-gradient(0deg, #fff, transparent);
+	filter: brightness(200%);
+}
+
+.bt-ai-btn:active .btn-letter {
+	text-shadow: 0 0 1px hsla(var(--highlight-color-hue), 100%, 90%, 90%);
+	animation: none;
+}
+
+.bt-ai-btn:hover {
+	border: solid 1px hsla(var(--highlight-color-hue), 100%, 80%, 40%);
+}
+
+.bt-ai-btn:hover::before {
+	box-shadow:
+		0 -8px 8px -6px #fffa inset,
+		0 -16px 16px -8px hsla(var(--highlight-color-hue), 100%, 70%, 30%) inset,
+		1px 1px 1px #fff2,
+		2px 2px 2px #fff1,
+		-1px -1px 1px #0002,
+		-2px -2px 2px #0001;
+}
+
+.bt-ai-btn:hover::after {
+	opacity: 1;
+	mask-image: linear-gradient(0deg, #fff, transparent);
+}
+
+.bt-ai-btn:hover .btn-svg {
+	fill: #fff;
+	filter: drop-shadow(0 0 3px hsl(var(--highlight-color-hue), 100%, 70%))
+		drop-shadow(0 -4px 6px #0009);
+	animation: none;
+}
+
+.bt-ai-btn.is-open {
+	border: solid 1px hsla(var(--highlight-color-hue), 100%, 80%, 50%);
+}
+
+.bt-ai-btn.is-busy {
+	pointer-events: none;
+	opacity: 0.92;
+	transform: scale(0.985);
 }
 
 .top-tabs {

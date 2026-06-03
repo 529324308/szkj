@@ -33,5 +33,5 @@ export default defineConfig({
   server: {
     host: '0.0.0.0', // 允许通过本地网络访问
   },
-  base: '/kdc/',
+  base: '/SZKJ/',
 });
