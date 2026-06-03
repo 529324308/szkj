@@ -91,6 +91,7 @@
 			@copy-all="copyAll"
 			@copy-coords="copyCoords"
 			@delete-current="deleteCurrentMeasure"
+			@export-current-kml="exportCurrentKml"
 			@toggle-sy-info-item="toggleSyInfoItem"
 			@select-sy-info-item="selectSyInfoItem"
 			@delete-sy-info-item="deleteSyInfoItem"
@@ -425,7 +426,7 @@ const djcxTab3 = reactive({ id: '', town: '临安市区', sampleType: '其它', 
 // 测绘数据
 const measurePanelVisible = ref(false);
 const measureActiveTab = ref('info');
-const DEFAULT_MEASURE_FORM = { name: '', unit: 'auto', path: '测绘/默认', desc: '', lengthMeters: 0, areaSqMeters: 0, heightMeters: 0, volumeCubicMeters: 0, longitude: null, latitude: null, kind: '' };
+const DEFAULT_MEASURE_FORM = { name: '', unit: 'auto', path: '测绘/默认', desc: '', lengthMeters: 0, areaSqMeters: 0, heightMeters: 0, volumeCubicMeters: 0, longitude: null, latitude: null, elevationMeters: null, kind: '' };
 const measureForm = reactive({ ...DEFAULT_MEASURE_FORM });
 const lastMeasure = reactive({ points: [], segmentsMeters: [], cumulativeMeters: [] });
 
@@ -1451,7 +1452,7 @@ watch(activeTopTab, async (newVal) => {
 });
 
 watch(
-	() => [measureForm.name, measureForm.unit, measureForm.desc, measureForm.heightMeters, measureForm.longitude, measureForm.latitude, measureForm.kind],
+	() => [measureForm.name, measureForm.unit, measureForm.desc, measureForm.heightMeters, measureForm.longitude, measureForm.latitude, measureForm.elevationMeters, measureForm.kind],
 	() => {
 		if (measureForm.kind === 'markPoint') {
 			const viewer = getViewer();
@@ -1463,12 +1464,14 @@ watch(
 			const desc = String(measureForm.desc || '');
 			const longitude = Number(measureForm.longitude);
 			const latitude = Number(measureForm.latitude);
+			const elevationMeters = Number(measureForm.elevationMeters);
 			entity._syMarkPointData = {
 				...entity._syMarkPointData,
 				name,
 				desc,
 				longitude: Number.isFinite(longitude) ? longitude : entity._syMarkPointData.longitude,
 				latitude: Number.isFinite(latitude) ? latitude : entity._syMarkPointData.latitude,
+				elevationMeters: Number.isFinite(elevationMeters) ? elevationMeters : entity._syMarkPointData.elevationMeters,
 			};
 			if (entity.label) entity.label.text = name;
 			bumpSyInfoListVersion();
@@ -1490,6 +1493,7 @@ watch(
 			segmentsMeters: [...lastMeasure.segmentsMeters],
 			cumulativeMeters: [...lastMeasure.cumulativeMeters],
 		});
+		attachMeasureNameLabel(currentMeasureEntity, currentMeasureEntity._measureData.name);
 		bumpSyInfoListVersion();
 	},
 	{ flush: 'post' }
@@ -1618,6 +1622,7 @@ function applyMeasureEntityVisibility(entity, visible) {
 	entity.show = visible;
 	if (entity._measurePoints) entity._measurePoints.forEach((point) => { point.show = visible; });
 	if (entity._measureLabel) entity._measureLabel.show = visible;
+	if (entity._nameLabel) entity._nameLabel.show = visible;
 }
 
 function setMeasureEntityVisible(entity, visible) {
@@ -1638,6 +1643,112 @@ function registerMeasureEntity(entity) {
 	if (!entity._syListOrder) entity._syListOrder = ++syInfoOrder;
 	if (entity._syUserVisible == null) entity._syUserVisible = true;
 	bumpSyInfoListVersion();
+}
+
+function getMeasureNameLabelPosition(entity) {
+	if (!entity) return null;
+	const dataPoints = entity._measureData?.points || [];
+	if (Array.isArray(dataPoints) && dataPoints.length) {
+		if (entity.polyline && dataPoints.length >= 2) {
+			return getDataPointsPathMiddlePosition(dataPoints);
+		}
+		if (entity.polygon || entity.rectangle) {
+			const count = dataPoints.length;
+			const sum = dataPoints.reduce((acc, point) => {
+				acc.lon += Number(point.lon) || 0;
+				acc.lat += Number(point.lat) || 0;
+				acc.height += Number(point.height) || 0;
+				return acc;
+			}, { lon: 0, lat: 0, height: 0 });
+			return Cesium.Cartesian3.fromDegrees(sum.lon / count, sum.lat / count, sum.height / count);
+		}
+		if (entity.ellipse) {
+			const center = dataPoints[0];
+			return Cesium.Cartesian3.fromDegrees(center.lon, center.lat, Number(center.height) || 0);
+		}
+		const point = dataPoints[0];
+		return Cesium.Cartesian3.fromDegrees(point.lon, point.lat, Number(point.height) || 0);
+	}
+	const now = Cesium.JulianDate.now();
+	if (entity.position) {
+		return typeof entity.position.getValue === 'function' ? entity.position.getValue(now) : entity.position;
+	}
+	return null;
+}
+
+function getDataPointsPathMiddlePosition(dataPoints = []) {
+	if (!Array.isArray(dataPoints) || dataPoints.length === 0) return null;
+	if (dataPoints.length === 1) {
+		const point = dataPoints[0];
+		return Cesium.Cartesian3.fromDegrees(point.lon, point.lat, Number(point.height) || 0);
+	}
+	const cartos = dataPoints.map((point) => Cesium.Cartographic.fromDegrees(point.lon, point.lat, Number(point.height) || 0));
+	const segments = [];
+	let total = 0;
+	for (let i = 1; i < cartos.length; i++) {
+		const geodesic = new Cesium.EllipsoidGeodesic(cartos[i - 1], cartos[i]);
+		const distance = geodesic.surfaceDistance || 0;
+		segments.push({ geodesic, distance, fromHeight: cartos[i - 1].height || 0, toHeight: cartos[i].height || 0 });
+		total += distance;
+	}
+	if (total <= 0) {
+		const first = dataPoints[0];
+		const last = dataPoints[dataPoints.length - 1];
+		return Cesium.Cartesian3.fromDegrees(
+			((Number(first.lon) || 0) + (Number(last.lon) || 0)) / 2,
+			((Number(first.lat) || 0) + (Number(last.lat) || 0)) / 2,
+			((Number(first.height) || 0) + (Number(last.height) || 0)) / 2
+		);
+	}
+	let walked = 0;
+	const half = total / 2;
+	for (const segment of segments) {
+		if (walked + segment.distance >= half) {
+			const localDistance = half - walked;
+			const ratio = segment.distance > 0 ? localDistance / segment.distance : 0;
+			const carto = segment.geodesic.interpolateUsingSurfaceDistance(localDistance);
+			const height = segment.fromHeight + (segment.toHeight - segment.fromHeight) * ratio;
+			return Cesium.Cartesian3.fromRadians(carto.longitude, carto.latitude, height);
+		}
+		walked += segment.distance;
+	}
+	const last = dataPoints[dataPoints.length - 1];
+	return Cesium.Cartesian3.fromDegrees(last.lon, last.lat, Number(last.height) || 0);
+}
+
+function attachMeasureNameLabel(entity, name) {
+	const viewer = getViewer();
+	if (!viewer || !entity) return;
+	const text = String(name || entity._measureData?.name || '').trim();
+	if (!text) return;
+	const position = getMeasureNameLabelPosition(entity);
+	if (!position) return;
+	if (entity._nameLabel) {
+		entity._nameLabel.position = position;
+		if (entity._nameLabel.label) entity._nameLabel.label.text = text;
+		if (entity._nameLabel.label) entity._nameLabel.label.pixelOffset = new Cesium.Cartesian2(0, -52);
+		entity._nameLabel.show = entity.show !== false;
+		return;
+	}
+	entity._nameLabel = viewer.entities.add({
+		position,
+		label: {
+			text,
+			font: '14px Microsoft YaHei',
+			style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+			fillColor: Cesium.Color.WHITE,
+			outlineColor: Cesium.Color.BLACK,
+			outlineWidth: 2,
+			verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+			pixelOffset: new Cesium.Cartesian2(0, -52),
+			disableDepthTestDistance: Number.POSITIVE_INFINITY,
+			showBackground: true,
+			backgroundColor: new Cesium.Color(0.16, 0.22, 0.21, 0.8)
+		}
+	});
+	entity._nameLabel.name = 'measure-name-label';
+	entity._nameLabel._measureNameLabelFor = entity.id;
+	entity._nameLabel.show = entity.show !== false;
 }
 
 function applyMarkPointEntityVisibility(entity, visible) {
@@ -2764,9 +2875,10 @@ function startTool(type) {
 			const cartesian = pickCartesian(click.position);
 			if (!cartesian) return;
 			const name = autoName('markPoint');
-			const carto = Cesium.Cartographic.fromCartesian(cartesian);
-			const longitude = Cesium.Math.toDegrees(carto.longitude);
-			const latitude = Cesium.Math.toDegrees(carto.latitude);
+			const pointInfo = cartesianToPointInfo(cartesian);
+			const longitude = pointInfo.lon;
+			const latitude = pointInfo.lat;
+			const elevationMeters = pointInfo.height;
 			const entity = viewer.entities.add({
 				position: cartesian,
 				point: {
@@ -2792,7 +2904,7 @@ function startTool(type) {
 					backgroundColor: new Cesium.Color(0.16, 0.22, 0.21, 0.8)
 				}
 			});
-			entity._syMarkPointData = { name, desc: '', longitude, latitude };
+			entity._syMarkPointData = { name, desc: '', longitude, latitude, elevationMeters };
 			registerMarkPointEntity(entity);
 			selectedTerrainItemKey.value = '';
 			selectedShpItemKey.value = '';
@@ -2985,6 +3097,15 @@ const cartesianToLngLat = (point) => {
 	];
 };
 
+const cartesianToPointInfo = (point) => {
+	const cartographic = Cesium.Cartographic.fromCartesian(point);
+	return {
+		lon: Cesium.Math.toDegrees(cartographic.longitude),
+		lat: Cesium.Math.toDegrees(cartographic.latitude),
+		height: Number.isFinite(cartographic.height) ? cartographic.height : 0,
+	};
+};
+
 const closeRing = (ring) => {
 	if (ring.length === 0) return ring;
 	const [firstX, firstY] = ring[0];
@@ -3021,6 +3142,230 @@ const buildCircleBoundaryPoints = (center, radius, segments = 128) => {
 	}
 	return pts;
 };
+
+const KML_XML_HEADER = '<?xml version="1.0" encoding="UTF-8"?>';
+
+function escapeXml(value) {
+	return String(value ?? '')
+		.replace(/&/g, '&amp;')
+		.replace(/</g, '&lt;')
+		.replace(/>/g, '&gt;')
+		.replace(/"/g, '&quot;')
+		.replace(/'/g, '&apos;');
+}
+
+function sanitizeFileName(name) {
+	const safe = String(name || '').trim().replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_');
+	return safe || '测绘对象';
+}
+
+function formatKmlCoordinateFromCartesian(cartesian) {
+	if (!cartesian) return '';
+	const carto = Cesium.Cartographic.fromCartesian(cartesian);
+	const height = Number.isFinite(carto.height) ? carto.height : 0;
+	return `${Cesium.Math.toDegrees(carto.longitude)},${Cesium.Math.toDegrees(carto.latitude)},${height}`;
+}
+
+function formatKmlCoordinates(cartesians = []) {
+	return cartesians
+		.filter(Boolean)
+		.map((cartesian) => formatKmlCoordinateFromCartesian(cartesian))
+		.filter(Boolean)
+		.join(' ');
+}
+
+function getEntityPolylinePositions(entity) {
+	const positionsProp = entity?.polyline?.positions;
+	if (!positionsProp) return [];
+	const now = Cesium.JulianDate.now();
+	if (typeof positionsProp.getValue === 'function') {
+		return positionsProp.getValue(now) || [];
+	}
+	return Array.isArray(positionsProp) ? positionsProp : [];
+}
+
+function getEntityPolygonPositions(entity) {
+	const hierarchyProp = entity?.polygon?.hierarchy;
+	if (!hierarchyProp) return [];
+	const now = Cesium.JulianDate.now();
+	const hierarchy = typeof hierarchyProp.getValue === 'function' ? hierarchyProp.getValue(now) : hierarchyProp;
+	return Array.isArray(hierarchy?.positions) ? hierarchy.positions : [];
+}
+
+function getRectangleBoundaryPositions(entity) {
+	const coordinatesProp = entity?.rectangle?.coordinates;
+	if (!coordinatesProp) return [];
+	const now = Cesium.JulianDate.now();
+	const rect = typeof coordinatesProp.getValue === 'function' ? coordinatesProp.getValue(now) : coordinatesProp;
+	if (!rect) return [];
+	return [
+		Cesium.Cartesian3.fromRadians(rect.west, rect.south),
+		Cesium.Cartesian3.fromRadians(rect.east, rect.south),
+		Cesium.Cartesian3.fromRadians(rect.east, rect.north),
+		Cesium.Cartesian3.fromRadians(rect.west, rect.north),
+		Cesium.Cartesian3.fromRadians(rect.west, rect.south),
+	];
+}
+
+function getCircleBoundaryPositions(entity) {
+	const positionProp = entity?.position;
+	const semiMajorAxisProp = entity?.ellipse?.semiMajorAxis;
+	if (!positionProp || !semiMajorAxisProp) return [];
+	const now = Cesium.JulianDate.now();
+	const center = typeof positionProp.getValue === 'function' ? positionProp.getValue(now) : positionProp;
+	const radius = typeof semiMajorAxisProp.getValue === 'function' ? semiMajorAxisProp.getValue(now) : semiMajorAxisProp;
+	if (!center || !Number.isFinite(radius) || radius <= 0) return [];
+	return buildCircleBoundaryPoints(center, radius, 128);
+}
+
+function ensureClosedPositions(positions = []) {
+	if (!positions.length) return [];
+	const first = positions[0];
+	const last = positions[positions.length - 1];
+	return Cesium.Cartesian3.equalsEpsilon(first, last, Cesium.Math.EPSILON8) ? positions : [...positions, first];
+}
+
+function resolveEntityExportGeometry(entity) {
+	if (!entity) return null;
+	if (entity._syMarkPointData || entity.point) {
+		const now = Cesium.JulianDate.now();
+		const position = typeof entity.position?.getValue === 'function' ? entity.position.getValue(now) : entity.position;
+		if (!position) return null;
+		return {
+			type: 'Point',
+			coordinates: formatKmlCoordinateFromCartesian(position),
+		};
+	}
+	if (entity.polyline) {
+		const positions = getEntityPolylinePositions(entity);
+		if (!positions.length) return null;
+		return {
+			type: 'LineString',
+			coordinates: formatKmlCoordinates(positions),
+		};
+	}
+	if (entity.polygon) {
+		const positions = ensureClosedPositions(getEntityPolygonPositions(entity));
+		if (positions.length < 4) return null;
+		return {
+			type: 'Polygon',
+			coordinates: formatKmlCoordinates(positions),
+		};
+	}
+	if (entity.rectangle) {
+		const positions = getRectangleBoundaryPositions(entity);
+		if (positions.length < 4) return null;
+		return {
+			type: 'Polygon',
+			coordinates: formatKmlCoordinates(positions),
+		};
+	}
+	if (entity.ellipse) {
+		const positions = ensureClosedPositions(getCircleBoundaryPositions(entity));
+		if (positions.length < 4) return null;
+		return {
+			type: 'Polygon',
+			coordinates: formatKmlCoordinates(positions),
+		};
+	}
+	return null;
+}
+
+function buildKmlPlacemark(entity, name, description) {
+	const geometry = resolveEntityExportGeometry(entity);
+	if (!geometry) return '';
+	const safeName = escapeXml(name || '测绘对象');
+	const safeDescription = escapeXml(description || '');
+	const styleMap = {
+		Point: `
+		<Style>
+			<IconStyle>
+				<scale>1.1</scale>
+				<Icon>
+					<href>http://maps.google.com/mapfiles/kml/paddle/red-circle.png</href>
+				</Icon>
+			</IconStyle>
+			<LabelStyle><scale>1</scale></LabelStyle>
+		</Style>`,
+		LineString: `
+		<Style>
+			<LineStyle>
+				<color>ffffffff</color>
+				<width>3</width>
+			</LineStyle>
+		</Style>`,
+		Polygon: `
+		<Style>
+			<LineStyle>
+				<color>ffffffff</color>
+				<width>2</width>
+			</LineStyle>
+			<PolyStyle>
+				<color>66000000</color>
+				<fill>1</fill>
+				<outline>1</outline>
+			</PolyStyle>
+		</Style>`,
+	};
+	const geometryXml = geometry.type === 'Point'
+		? `<Point><coordinates>${geometry.coordinates}</coordinates></Point>`
+		: geometry.type === 'LineString'
+			? `<LineString><tessellate>1</tessellate><coordinates>${geometry.coordinates}</coordinates></LineString>`
+			: `<Polygon><tessellate>1</tessellate><outerBoundaryIs><LinearRing><coordinates>${geometry.coordinates}</coordinates></LinearRing></outerBoundaryIs></Polygon>`;
+	return `
+	<Placemark>
+		<name>${safeName}</name>
+		<description>${safeDescription}</description>${styleMap[geometry.type] || ''}
+		${geometryXml}
+	</Placemark>`;
+}
+
+function downloadTextFile(content, fileName, mimeType = 'application/vnd.google-earth.kml+xml;charset=utf-8') {
+	const blob = new Blob([content], { type: mimeType });
+	const url = URL.createObjectURL(blob);
+	const link = document.createElement('a');
+	link.href = url;
+	link.download = fileName;
+	document.body.appendChild(link);
+	link.click();
+	document.body.removeChild(link);
+	setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function exportCurrentKml() {
+	const viewer = getViewer();
+	let entity = currentMeasureEntity;
+	let name = String(measureForm.name || '').trim();
+	let description = String(measureForm.desc || '').trim();
+
+	if (measureForm.kind === 'markPoint' && selectedMarkPointEntityId.value) {
+		entity = viewer?.entities.getById(selectedMarkPointEntityId.value) || null;
+		name = String(measureForm.name || entity?._syMarkPointData?.name || '').trim();
+		description = String(measureForm.desc || entity?._syMarkPointData?.desc || '').trim();
+	}
+
+	if (!entity) {
+		ElMessage.warning({ message: '请先选中一个测绘对象后再导出 KML', offset: MESSAGE_OFFSET_TOP });
+		return;
+	}
+
+	const placemark = buildKmlPlacemark(entity, name, description);
+	if (!placemark) {
+		ElMessage.warning({ message: '当前对象暂不支持导出为 KML', offset: MESSAGE_OFFSET_TOP });
+		return;
+	}
+
+	const docName = escapeXml(name || '测绘对象');
+	const kmlText = `${KML_XML_HEADER}
+<kml xmlns="http://www.opengis.net/kml/2.2">
+	<Document>
+		<name>${docName}</name>${placemark}
+	</Document>
+</kml>`;
+	const fileName = `${sanitizeFileName(name || '测绘对象')}.kml`;
+	downloadTextFile(kmlText, fileName);
+	ElMessage.success({ message: `KML 已导出：${fileName}`, offset: MESSAGE_OFFSET_TOP });
+}
 
 // 辅助计算函数: 基于 Turf 中心点和局部 ENU 平面计算面积
 const polygonArea = (pts) => {
@@ -3588,10 +3933,7 @@ function finalizeDrawing() {
 			finalLengthMeters = d;
 			measurePanelVisible.value = true;
 			showInfoPanel.value = false;
-			lastMeasure.points = positions.map(p => {
-				const c = toCarto(p);
-				return { lon: CesiumLib.Math.toDegrees(c.longitude), lat: CesiumLib.Math.toDegrees(c.latitude) };
-			});
+			lastMeasure.points = positions.map(cartesianToPointInfo);
 			lastMeasure.segmentsMeters = [];
 			lastMeasure.cumulativeMeters = [];
 			let acc = 0;
@@ -3601,6 +3943,7 @@ function finalizeDrawing() {
 				lastMeasure.segmentsMeters.push(seg);
 				lastMeasure.cumulativeMeters.push(acc);
 			}
+			labelPos = getDataPointsPathMiddlePosition(lastMeasure.points) || labelPos;
 			if (lineEntity) {
 				lineEntity._measureData = { points: [...lastMeasure.points], segmentsMeters: [...lastMeasure.segmentsMeters], cumulativeMeters: [...lastMeasure.cumulativeMeters], lengthMeters: d, kind: 'distance', name: defaultName, unit: measureForm.unit || 'auto', desc: measureForm.desc || '' };
 				lineEntity.name = 'measure-distance';
@@ -3639,10 +3982,7 @@ function finalizeDrawing() {
 				showInfoPanel.value = false;
 
 				// 更新 lastMeasure
-				lastMeasure.points = positions.map(p => {
-					const c = toCarto(p);
-					return { lon: CesiumLib.Math.toDegrees(c.longitude), lat: CesiumLib.Math.toDegrees(c.latitude) };
-				});
+				lastMeasure.points = positions.map(cartesianToPointInfo);
 				lastMeasure.segmentsMeters = [];
 				lastMeasure.cumulativeMeters = [];
 				let acc = 0;
@@ -3704,10 +4044,7 @@ function finalizeDrawing() {
 				showInfoPanel.value = false;
 
 				// 更新 lastMeasure
-				lastMeasure.points = rectPts.map(p => {
-					const c = toCarto(p);
-					return { lon: CesiumLib.Math.toDegrees(c.longitude), lat: CesiumLib.Math.toDegrees(c.latitude) };
-				});
+				lastMeasure.points = rectPts.map(cartesianToPointInfo);
 				lastMeasure.segmentsMeters = [];
 				lastMeasure.cumulativeMeters = [];
 				let acc = 0;
@@ -3754,10 +4091,7 @@ function finalizeDrawing() {
 				text = `R=${r.toFixed(2)} m`;
 
 				// 更新 lastMeasure (圆心和边缘点)
-				lastMeasure.points = positions.map(p => {
-					const c = toCarto(p);
-					return { lon: CesiumLib.Math.toDegrees(c.longitude), lat: CesiumLib.Math.toDegrees(c.latitude) };
-				});
+				lastMeasure.points = positions.map(cartesianToPointInfo);
 				lastMeasure.segmentsMeters = [0, r];
 				lastMeasure.cumulativeMeters = [0, r];
 
@@ -3789,9 +4123,13 @@ function finalizeDrawing() {
 						depthFailMaterial: COLORS.NORMAL.LINE.withAlpha(0.5)
 					} 
 				});
+				currentMeasureEntity = azEntity;
 				azEntity._drawn = true;
 				azEntity._measurePoints = [...currentMeasurePoints];
 				const b = bearing(positions[0], positions[positions.length - 1]);
+				lastMeasure.points = positions.map(cartesianToPointInfo);
+				lastMeasure.segmentsMeters = [];
+				lastMeasure.cumulativeMeters = [];
 				text = `${b.toFixed(2)}°`;
 				
 				// 填充 measureData
@@ -3800,11 +4138,11 @@ function finalizeDrawing() {
 					name: autoName('azimuth'),
 					lengthMeters: new CesiumLib.EllipsoidGeodesic(toCarto(positions[0]), toCarto(positions[1])).surfaceDistance,
 					areaSqMeters: 0,
-					points: positions.map(p => {
-						const c = toCarto(p);
-						return { lon: CesiumLib.Math.toDegrees(c.longitude), lat: CesiumLib.Math.toDegrees(c.latitude) };
-					})
+					points: [...lastMeasure.points],
+					segmentsMeters: [...lastMeasure.segmentsMeters],
+					cumulativeMeters: [...lastMeasure.cumulativeMeters]
 				};
+				measureForm.name = azEntity._measureData.name;
 			}
 			break;
 		}
@@ -3818,9 +4156,13 @@ function finalizeDrawing() {
 						depthFailMaterial: COLORS.NORMAL.LINE.withAlpha(0.5)
 					} 
 				});
+				currentMeasureEntity = angEntity;
 				angEntity._drawn = true;
 				angEntity._measurePoints = [...currentMeasurePoints];
 				const a = angleDeg(positions[0], positions[1], positions[2]);
+				lastMeasure.points = positions.map(cartesianToPointInfo);
+				lastMeasure.segmentsMeters = [];
+				lastMeasure.cumulativeMeters = [];
 				text = `${a.toFixed(2)}°`;
 
 				// 填充 measureData
@@ -3829,11 +4171,11 @@ function finalizeDrawing() {
 					name: autoName('angle'),
 					lengthMeters: 0,
 					areaSqMeters: 0,
-					points: positions.map(p => {
-						const c = toCarto(p);
-						return { lon: CesiumLib.Math.toDegrees(c.longitude), lat: CesiumLib.Math.toDegrees(c.latitude) };
-					})
+					points: [...lastMeasure.points],
+					segmentsMeters: [...lastMeasure.segmentsMeters],
+					cumulativeMeters: [...lastMeasure.cumulativeMeters]
 				};
+				measureForm.name = angEntity._measureData.name;
 			}
 			break;
 		}
@@ -3863,6 +4205,7 @@ function finalizeDrawing() {
 	measureActiveTab.value = 'info';
 	
 	if (currentMeasureEntity?._measureData) {
+		attachMeasureNameLabel(currentMeasureEntity, currentMeasureEntity._measureData.name);
 		registerMeasureEntity(currentMeasureEntity);
 	}
 	
@@ -4647,13 +4990,14 @@ function copyCoords() {
 	if (measureForm.kind === 'markPoint') {
 		const lon = Number(measureForm.longitude);
 		const lat = Number(measureForm.latitude);
-		const text = `${Number.isFinite(lon) ? lon.toFixed(12) : ''}\t${Number.isFinite(lat) ? lat.toFixed(12) : ''}`.trim();
+		const height = Number(measureForm.elevationMeters);
+		const text = `${Number.isFinite(lon) ? lon.toFixed(12) : ''}\t${Number.isFinite(lat) ? lat.toFixed(12) : ''}\t${Number.isFinite(height) ? height.toFixed(2) : ''}`.trim();
 		if (text) navigator.clipboard.writeText(text);
 		return;
 	}
-	navigator.clipboard.writeText(lastMeasure.points.map((p, i) => `${i}\t${p.lon}\t${p.lat}`).join('\n'));
+	navigator.clipboard.writeText(lastMeasure.points.map((p, i) => `${i}\t${p.lon}\t${p.lat}\t${Number.isFinite(Number(p?.height)) ? Number(p.height).toFixed(2) : ''}`).join('\n'));
 }
-function copyAll() { navigator.clipboard.writeText(lastMeasure.points.map((p, i) => `${i}\t${p.lon}\t${p.lat}\t${lastMeasure.segmentsMeters[i]}\t${lastMeasure.cumulativeMeters[i]}`).join('\n')); }
+function copyAll() { navigator.clipboard.writeText(lastMeasure.points.map((p, i) => `${i}\t${p.lon}\t${p.lat}\t${Number.isFinite(Number(p?.height)) ? Number(p.height).toFixed(2) : ''}\t${lastMeasure.segmentsMeters[i]}\t${lastMeasure.cumulativeMeters[i]}`).join('\n')); }
 
 function toggleSyInfoItem({ item, checked }) {
 	if (!item) return;
@@ -4902,6 +5246,7 @@ function deleteMeasureEntity(entity) {
 		measurePanelVisible.value = false;
 	}
 	if (entity._measureLabel) viewer.entities.remove(entity._measureLabel);
+	if (entity._nameLabel) viewer.entities.remove(entity._nameLabel);
 	if (entity._measurePoints) entity._measurePoints.forEach((point) => viewer.entities.remove(point));
 	viewer.entities.remove(entity);
 	bumpSyInfoListVersion();
@@ -5025,8 +5370,9 @@ async function clearAllMeasures() {
 		selectedMarkPointEntityId.value = '';
 	}
 	[...viewer.entities.values].forEach(ent => {
-		if (ent._measureData || ent._drawn || ent.name === 'measure-label') {
+		if (ent._measureData || ent._drawn || ent.name === 'measure-label' || ent.name === 'measure-name-label') {
 			if (ent._measureLabel) viewer.entities.remove(ent._measureLabel);
+			if (ent._nameLabel) viewer.entities.remove(ent._nameLabel);
 			if (ent._measurePoints) ent._measurePoints.forEach(p => viewer.entities.remove(p));
 			viewer.entities.remove(ent);
 		}

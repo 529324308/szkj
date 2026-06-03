@@ -490,6 +490,11 @@
 							<span class="badge" style="background:#20b36e">纬度</span>
 							<div class="value">{{ formattedLatitude }}</div>
 						</div>
+						<div class="result-line">
+							<span class="badge" style="background:#409eff">高程</span>
+							<div class="value">{{ formattedElevation }}</div>
+							<div class="unit">米</div>
+						</div>
 					</div>
 					<div class="data-toolbar">
 						<button class="copy-btn" @click="$emit('copy-coords')">一键复制</button>
@@ -509,6 +514,13 @@
 								<div class="value">{{ formattedArea }}</div>
 								<div class="unit">{{ areaUnitLabel }}</div>
 							</template>
+						</div>
+					</div>
+					<div v-if="hasPointHeights" class="result-box">
+						<div class="result-line">
+							<span class="badge" style="background:#409eff">平均高程</span>
+							<div class="value">{{ formattedAverageHeight }}</div>
+							<div class="unit">米</div>
 						</div>
 					</div>
 					<div class="row" v-if="hasArea">
@@ -547,6 +559,7 @@
 								<th class="data-index"></th>
 								<th class="data-th">经度</th>
 								<th class="data-th">纬度</th>
+								<th class="data-th">高程</th>
 								<th class="data-th">线段距离</th>
 								<th class="data-th">累计距离</th>
 							</tr>
@@ -561,6 +574,9 @@
 									<div class="data-cell">{{ Number(p.lat).toFixed(12) }}</div>
 								</td>
 								<td class="data-td">
+									<div class="data-cell">{{ formatHeight(p.height) }}</div>
+								</td>
+								<td class="data-td">
 									<div class="data-cell">{{ i === 0 ? '-' : formatMeters(lastMeasure.segmentsMeters[i]) }}</div>
 								</td>
 								<td class="data-td">
@@ -573,6 +589,7 @@
 			</template>
 		</div>
 		<div class="measure-footer">
+			<button class="ghost export-btn" @click="$emit('export-current-kml')">导出KML</button>
 			<button class="ghost" @click="$emit('delete-current')">删除</button>
 		</div>
 	</div>
@@ -657,7 +674,7 @@ const props = defineProps({
 	},
 });
 
-const emit = defineEmits(['start-tool', 'clear-all', 'update:measurePanelVisible', 'update:measureActiveTab', 'copy-all', 'copy-coords', 'delete-current', 'open-terrain-panel', 'close-terrain', 'confirm-terrain', 'cancel-terrain', 'update:terrainUrl', 'update:terrainName', 'toggle-sy-info-item', 'select-sy-info-item', 'delete-sy-info-item', 'confirm-shp-import', 'confirm-kml-import', 'confirm-cad-import']);
+const emit = defineEmits(['start-tool', 'clear-all', 'update:measurePanelVisible', 'update:measureActiveTab', 'copy-all', 'copy-coords', 'delete-current', 'export-current-kml', 'open-terrain-panel', 'close-terrain', 'confirm-terrain', 'cancel-terrain', 'update:terrainUrl', 'update:terrainName', 'toggle-sy-info-item', 'select-sy-info-item', 'delete-sy-info-item', 'confirm-shp-import', 'confirm-kml-import', 'confirm-cad-import']);
 const bookmarkIcon = new URL('../../assets/左边.png', import.meta.url).href;
 const deleteIcon = new URL('../../assets/删除.png', import.meta.url).href;
 const isInfoListCollapsed = ref(true);
@@ -748,6 +765,12 @@ const formattedLatitude = computed(() => {
 	return Number.isFinite(n) ? n.toFixed(12) : '-';
 });
 
+const formattedElevation = computed(() => {
+	const height = props.measureForm?.elevationMeters;
+	const n = Number(height);
+	return Number.isFinite(n) ? n.toFixed(2) : '-';
+});
+
 const unitLabel = computed(() => {
 	const m = props.measureForm.lengthMeters;
 	const useKm = props.measureForm.unit === 'km' || (props.measureForm.unit === 'auto' && m >= 1000);
@@ -783,9 +806,26 @@ const volumeUnitLabel = computed(() => {
 
 const hasVolume = computed(() => props.measureForm.areaSqMeters > 0 && props.measureForm.heightMeters > 0);
 
+const hasPointHeights = computed(() => Array.isArray(props.lastMeasure?.points) && props.lastMeasure.points.some((point) => Number.isFinite(Number(point?.height))));
+
+const formattedAverageHeight = computed(() => {
+	const points = Array.isArray(props.lastMeasure?.points) ? props.lastMeasure.points : [];
+	const heights = points
+		.map((point) => Number(point?.height))
+		.filter((height) => Number.isFinite(height));
+	if (!heights.length) return '-';
+	const avg = heights.reduce((sum, height) => sum + height, 0) / heights.length;
+	return avg.toFixed(2);
+});
+
 const formatMeters = (m) => {
 	const useKm = props.measureForm.unit === 'km' || (props.measureForm.unit === 'auto' && m >= 1000);
 	return useKm ? (m / 1000).toFixed(2) : m.toFixed(2);
+}
+
+const formatHeight = (height) => {
+	const n = Number(height);
+	return Number.isFinite(n) ? n.toFixed(2) : '-';
 }
 
 const emitTool = (type) => {
@@ -2111,6 +2151,10 @@ watch(
 .ghost:hover {
 	background: #ff7676;
 	color: #f2f2f2;
+}
+
+.export-btn:hover {
+	background: #409eff;
 }
 
 .data-toolbar {
