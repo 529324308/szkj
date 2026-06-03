@@ -61,7 +61,7 @@
 - `cancelTerrainPanel()`：取消地形面板编辑。
 - `confirmTerrain()`：确认并应用地形配置。
 - `closeTerrain()`：关闭或移除当前地形状态。
-- `setBaseLayer(layerName)`：在卫星图、矢量图、注记图之间切换底图。
+- `setBaseLayer(layerName)`：在全球影像、天地图、矢量图、注记图之间切换底图；默认启用纯天地图影像，矢量图使用白底矢量路网与标注，注记图使用天地图影像叠加地名标注。
 - `toggleLayerPanel()`：显示或隐藏底图面板。
 
 ### 4.4 智能分析 / AI 聊天

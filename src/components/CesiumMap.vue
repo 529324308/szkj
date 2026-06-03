@@ -191,9 +191,13 @@
 		<!-- 图层选择悬浮面板 -->
 		<div v-if="layerPanelVisible" ref="layerPanelRef" class="layer-panel" @click.stop>
 			<div class="layer-grid">
-				<div class="layer-card" :class="{ active: baseLayerActive === '卫星图' }" @click="setBaseLayer('卫星图')">
+				<div class="layer-card" :class="{ active: baseLayerActive === '全球影像' }" @click="setBaseLayer('全球影像')">
 					<div class="thumb thumb-satellite"></div>
-					<div class="label">卫星图</div>
+					<div class="label">全球影像</div>
+				</div>
+				<div class="layer-card" :class="{ active: baseLayerActive === '天地图' }" @click="setBaseLayer('天地图')">
+					<div class="thumb thumb-tianditu"></div>
+					<div class="label">天地图</div>
 				</div>
 				<div class="layer-card" :class="{ active: baseLayerActive === '矢量图' }" @click="setBaseLayer('矢量图')">
 					<div class="thumb thumb-vector"></div>
@@ -373,8 +377,14 @@ const {
 	removeScaleUpdateHandler,
 	addVecLayer,
 	addCvaLayer,
+	addCiaLayer,
+	addImgLayer,
 	removeVecLayer,
 	removeCvaLayer,
+	removeCiaLayer,
+	removeImgLayer,
+	showGlobalImageryLayer,
+	hideGlobalImageryLayer,
 	enableNetworkTerrain,
 	disableTerrain,
 	enterHomeScene,
@@ -438,7 +448,7 @@ const headingDeg = ref(0);
 const scaleBar = reactive({ metersPerPixel: 0, widthPx: 100, label: '100 m', zoom: 0 });
 const compassRotation = computed(() => headingDeg.value - 90);
 const layerPanelVisible = ref(false);
-const baseLayerActive = ref('卫星图');
+const baseLayerActive = ref('天地图');
 const showInfoPanel = ref(false);
 const clickInfo = ref({ coordinates: null, properties: {}, feature: null });
 const djcxLoading = ref(false);
@@ -3884,9 +3894,31 @@ async function locateToMe() {
 }
 function setBaseLayer(name) {
 	baseLayerActive.value = name;
-	if (name === '卫星图') { removeVecLayer(); removeCvaLayer(); }
-	else if (name === '矢量图') { addVecLayer(); addCvaLayer(); }
-	else { removeVecLayer(); addCvaLayer(); }
+	if (name === '全球影像') {
+		showGlobalImageryLayer();
+		removeImgLayer();
+		removeVecLayer();
+		removeCvaLayer();
+		removeCiaLayer();
+	} else if (name === '天地图') {
+		hideGlobalImageryLayer();
+		addImgLayer();
+		removeVecLayer();
+		removeCvaLayer();
+		removeCiaLayer();
+	} else if (name === '矢量图') {
+		hideGlobalImageryLayer();
+		removeImgLayer();
+		addVecLayer();
+		addCvaLayer();
+		removeCiaLayer();
+	} else {
+		hideGlobalImageryLayer();
+		addImgLayer();
+		removeVecLayer();
+		removeCvaLayer();
+		addCiaLayer();
+	}
 }
 function toggleLayerPanel() { layerPanelVisible.value = !layerPanelVisible.value; }
 function closeInfoPanel() {
@@ -5490,20 +5522,35 @@ async function clearAllMeasures() {
 .zhinanzhen { background-image: url('../assets/指南针.png'); background-size: 100% 70%; transition: transform 0.2s linear; }
 
 .layer-panel {
-	position: absolute; bottom: 70px; right: 10px; width: 220px;
+	position: absolute; bottom: 70px; right: 10px; width: min(452px, calc(100vw - 20px));
 	background: rgba(25, 35, 32, 0.9); border: 1px solid #3a4a46;
 	border-radius: 6px; z-index: 10;
 }
 
-.layer-grid { display: flex; gap: 10px; padding: 10px; justify-content: space-between; }
+.layer-grid {
+	display: grid;
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+	gap: 10px;
+	padding: 10px;
+}
 .layer-card {
-	width: 110px; height: 90px; background: #25322f;
+	width: 100%; height: 90px; background: #25322f;
 	border: 1px solid #3a4a46; border-radius: 6px;
 	cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: flex-end;
+	min-width: 0;
 }
 
 .layer-card .thumb { width: 100%; height: 65px; background-size: cover; background-position: center; }
-.layer-card .label { width: 100%; color: #fff; text-align: center; font-size: 14px; line-height: 28px; }
+.layer-card .label {
+	width: 100%;
+	color: #fff;
+	text-align: center;
+	font-size: clamp(12px, 1vw, 14px);
+	line-height: 28px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
 .layer-card.active { border-color: #45efff; }
 .layer-card.active .label { background: #1f8cf0; }
 
@@ -5523,6 +5570,7 @@ async function clearAllMeasures() {
 }
 
 .thumb-satellite { background-image: url('../assets/卫星图.png'); }
+.thumb-tianditu { background-image: url('../assets/卫星图.png'); }
 .thumb-vector { background-image: url('../assets/矢量图.png'); }
 .thumb-road { background-image: url('../assets/注记图.png'); }
 

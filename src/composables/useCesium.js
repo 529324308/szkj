@@ -28,6 +28,7 @@ export function useCesium(containerId) {
 	let cvaLayer;
 	let imgLayer;
 	let ciaLayer;
+	let globalImageryLayer = null;
 	// 保存 addImageryProvider 返回的 ImageryLayer 引用，便于移除
 	let vecImageryLayer = null;
 	let cvaImageryLayer = null;
@@ -497,6 +498,7 @@ export function useCesium(containerId) {
 		});
 		// 隐藏版权信息
 		viewer._cesiumWidget._creditContainer.style.display = 'none';
+		globalImageryLayer = viewer.imageryLayers.get(0) || null;
 		// 调整地图对比度
 		const imageryLayer = viewer.imageryLayers.get(0); // 获取第一个图层
 		// imageryLayer.brightness = 0.3; // 设置亮度，值越小颜色越暗
@@ -511,6 +513,8 @@ export function useCesium(containerId) {
 		// 澶╁湴鍥惧奖鍍忓簳鍥惧拰娉ㄨ
 		imgLayer = createTdtImageryProvider('img');
 		ciaLayer = createTdtImageryProvider('cia');
+		hideGlobalImageryLayer();
+		addImgLayer();
 
 		// 默认关闭地形，按需切换到网络地形
 		disableTerrain();
@@ -538,6 +542,22 @@ export function useCesium(containerId) {
 		}
 		viewer.scene.requestRender();
 	}
+	// 添加影像注记
+	function addCiaLayer() {
+		if (!viewer) return;
+		if (!ciaImageryLayer) {
+			ciaImageryLayer = viewer.imageryLayers.addImageryProvider(ciaLayer);
+		}
+		viewer.scene.requestRender();
+	}
+	// 添加天地图影像底图
+	function addImgLayer() {
+		if (!viewer) return;
+		if (!imgImageryLayer) {
+			imgImageryLayer = viewer.imageryLayers.addImageryProvider(imgLayer);
+		}
+		viewer.scene.requestRender();
+	}
 
 	// 删除矢量底图
 	function removeVecLayer(){
@@ -546,6 +566,7 @@ export function useCesium(containerId) {
 			viewer.imageryLayers.remove(vecImageryLayer, true);
 			vecImageryLayer = null;
 		}
+		viewer.scene.requestRender();
 	}
 	// 删除矢量注记
 	function removeCvaLayer(){
@@ -554,6 +575,37 @@ export function useCesium(containerId) {
 			viewer.imageryLayers.remove(cvaImageryLayer, true);
 			cvaImageryLayer = null;
 		}
+		viewer.scene.requestRender();
+	}
+	// 删除影像注记
+	function removeCiaLayer() {
+		if (!viewer) return;
+		if (ciaImageryLayer) {
+			viewer.imageryLayers.remove(ciaImageryLayer, true);
+			ciaImageryLayer = null;
+		}
+		viewer.scene.requestRender();
+	}
+	// 删除天地图影像底图
+	function removeImgLayer() {
+		if (!viewer) return;
+		if (imgImageryLayer) {
+			viewer.imageryLayers.remove(imgImageryLayer, true);
+			imgImageryLayer = null;
+		}
+		viewer.scene.requestRender();
+	}
+	// 显示 Cesium 默认全球影像
+	function showGlobalImageryLayer() {
+		if (!globalImageryLayer) return;
+		globalImageryLayer.show = true;
+		viewer?.scene?.requestRender();
+	}
+	// 隐藏 Cesium 默认全球影像，避免与天地图影像叠加
+	function hideGlobalImageryLayer() {
+		if (!globalImageryLayer) return;
+		globalImageryLayer.show = false;
+		viewer?.scene?.requestRender();
 	}
 
 
@@ -1059,8 +1111,14 @@ export function useCesium(containerId) {
 		removeScaleUpdateHandler,
 		addVecLayer,
 		addCvaLayer,
+		addCiaLayer,
+		addImgLayer,
 		removeVecLayer,
 		removeCvaLayer,
+		removeCiaLayer,
+		removeImgLayer,
+		showGlobalImageryLayer,
+		hideGlobalImageryLayer,
 		enableNetworkTerrain,
 		disableTerrain,
 		setHomeInitialHeight,
