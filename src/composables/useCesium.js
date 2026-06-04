@@ -67,6 +67,145 @@ export function useCesium(containerId) {
 	};
 
 	const REALTIME_LIGHTING_SYNC_INTERVAL_MS = 1000;
+	const HEADING_UPDATE_INTERVAL_MS = 80;
+	const SCALE_UPDATE_INTERVAL_MS = 120;
+	const PERFORMANCE_SAMPLE_INTERVAL_MS = 1000;
+	let mouseMoveFrameId = null;
+	let pendingMouseMovePosition = null;
+	let headingUpdateCleanup = null;
+	let scaleUpdateCleanup = null;
+	let requestRenderCallCount = 0;
+	let requestRenderOriginal = null;
+	let performanceMonitorCleanup = null;
+	let cameraMoving = false;
+	const performanceStatsListeners = new Set();
+	const performanceStats = {
+		fps: 0,
+		frameCount: 0,
+		cameraMoving: false,
+		tilesetCount: 0,
+		dataSourceCount: 0,
+		renderRequestCount: 0,
+		renderRequestsPerSecond: 0,
+		imageryLayerCount: 0,
+		terrainMode: 'ellipsoid',
+		primitiveCount: 0,
+		timestamp: '',
+	};
+
+	function getTerrainMode() {
+		if (!viewer?.terrainProvider) return 'none';
+		return viewer.terrainProvider instanceof Cesium.EllipsoidTerrainProvider ? 'ellipsoid' : 'network';
+	}
+
+	function buildPerformanceStatsSnapshot(patch = {}) {
+		return {
+			...performanceStats,
+			tilesetCount: Object.keys(currentTilesetList).length,
+			dataSourceCount: viewer?.dataSources?.length ?? 0,
+			renderRequestCount: requestRenderCallCount,
+			imageryLayerCount: viewer?.imageryLayers?.length ?? 0,
+			terrainMode: getTerrainMode(),
+			primitiveCount: viewer?.scene?.primitives?.length ?? 0,
+			cameraMoving,
+			timestamp: new Date().toISOString(),
+			...patch,
+		};
+	}
+
+	function emitPerformanceStats(patch = {}) {
+		Object.assign(performanceStats, buildPerformanceStatsSnapshot(patch));
+		const snapshot = { ...performanceStats };
+		for (const listener of performanceStatsListeners) {
+			try {
+				listener(snapshot);
+			} catch (error) {
+				console.warn('性能监控订阅回调执行失败:', error);
+			}
+		}
+	}
+
+	function subscribePerformanceStats(listener, options = {}) {
+		if (typeof listener !== 'function') {
+			return () => {};
+		}
+		performanceStatsListeners.add(listener);
+		if (options.immediate !== false) {
+			listener({ ...performanceStats });
+		}
+		return () => {
+			performanceStatsListeners.delete(listener);
+		};
+	}
+
+	function getPerformanceStats() {
+		return { ...performanceStats };
+	}
+
+	function startPerformanceMonitor() {
+		if (!viewer || performanceMonitorCleanup) return;
+		cameraMoving = false;
+		requestRenderCallCount = 0;
+		requestRenderOriginal = viewer.scene.requestRender.bind(viewer.scene);
+		viewer.scene.requestRender = function requestRenderWithCounter(...args) {
+			requestRenderCallCount += 1;
+			return requestRenderOriginal(...args);
+		};
+		let frameCountSinceLastSample = 0;
+		let renderRequestCountAtLastSample = 0;
+		let sampleStartedAt = performance.now();
+		const onPostRender = () => {
+			frameCountSinceLastSample += 1;
+			const now = performance.now();
+			const elapsedMs = now - sampleStartedAt;
+			if (elapsedMs < PERFORMANCE_SAMPLE_INTERVAL_MS) return;
+			const elapsedSeconds = elapsedMs / 1000;
+			const fps = elapsedSeconds > 0 ? frameCountSinceLastSample / elapsedSeconds : 0;
+			const renderRequestsSinceLastSample = requestRenderCallCount - renderRequestCountAtLastSample;
+			const renderRequestsPerSecond = elapsedSeconds > 0 ? renderRequestsSinceLastSample / elapsedSeconds : 0;
+			emitPerformanceStats({
+				fps: Number.isFinite(fps) ? Number(fps.toFixed(1)) : 0,
+				frameCount: performanceStats.frameCount + frameCountSinceLastSample,
+				renderRequestsPerSecond: Number.isFinite(renderRequestsPerSecond) ? Number(renderRequestsPerSecond.toFixed(1)) : 0,
+			});
+			frameCountSinceLastSample = 0;
+			renderRequestCountAtLastSample = requestRenderCallCount;
+			sampleStartedAt = now;
+		};
+		const removeMoveStartListener = viewer.camera.moveStart.addEventListener(() => {
+			cameraMoving = true;
+			emitPerformanceStats();
+		});
+		const removeMoveEndListener = viewer.camera.moveEnd.addEventListener(() => {
+			cameraMoving = false;
+			emitPerformanceStats();
+		});
+		viewer.scene.postRender.addEventListener(onPostRender);
+		performanceMonitorCleanup = () => {
+			if (viewer?.scene && requestRenderOriginal) {
+				viewer.scene.requestRender = requestRenderOriginal;
+			}
+			requestRenderOriginal = null;
+			if (viewer?.scene) {
+				viewer.scene.postRender.removeEventListener(onPostRender);
+			}
+			if (typeof removeMoveStartListener === 'function') removeMoveStartListener();
+			if (typeof removeMoveEndListener === 'function') removeMoveEndListener();
+			performanceMonitorCleanup = null;
+		};
+		emitPerformanceStats({
+			fps: 0,
+			frameCount: 0,
+			renderRequestsPerSecond: 0,
+		});
+	}
+
+	function stopPerformanceMonitor() {
+		if (typeof performanceMonitorCleanup === 'function') {
+			performanceMonitorCleanup();
+		}
+		cameraMoving = false;
+	}
 
 	function createFallbackTerrainData(provider, x, y, level) {
 		const width = provider?._width || 64;
@@ -136,11 +275,13 @@ export function useCesium(containerId) {
 	function enableNetworkTerrain() {
 		if (!viewer) return;
 		viewer.terrainProvider = getTdtTerrainProvider();
+		emitPerformanceStats();
 	}
 
 	function disableTerrain() {
 		if (!viewer) return;
 		viewer.terrainProvider = new Cesium.EllipsoidTerrainProvider();
+		emitPerformanceStats();
 	}
 
 	function createTdtImageryProvider(layer) {
@@ -520,6 +661,7 @@ export function useCesium(containerId) {
 		disableTerrain();
 		enableRealtimeLighting();
 		captureInitialHomeCameraView(true);
+		startPerformanceMonitor();
 
 		// viewer.extend(Cesium.viewerCesiumInspectorMixin);
 		
@@ -533,6 +675,7 @@ export function useCesium(containerId) {
 			vecImageryLayer = viewer.imageryLayers.addImageryProvider(vecLayer);
 		}
 		viewer.scene.requestRender();
+		emitPerformanceStats();
 	}
 	// 添加矢量注记
 	function addCvaLayer(){
@@ -541,6 +684,7 @@ export function useCesium(containerId) {
 			cvaImageryLayer = viewer.imageryLayers.addImageryProvider(cvaLayer);
 		}
 		viewer.scene.requestRender();
+		emitPerformanceStats();
 	}
 	// 添加影像注记
 	function addCiaLayer() {
@@ -549,6 +693,7 @@ export function useCesium(containerId) {
 			ciaImageryLayer = viewer.imageryLayers.addImageryProvider(ciaLayer);
 		}
 		viewer.scene.requestRender();
+		emitPerformanceStats();
 	}
 	// 添加天地图影像底图
 	function addImgLayer() {
@@ -557,6 +702,7 @@ export function useCesium(containerId) {
 			imgImageryLayer = viewer.imageryLayers.addImageryProvider(imgLayer);
 		}
 		viewer.scene.requestRender();
+		emitPerformanceStats();
 	}
 
 	// 删除矢量底图
@@ -567,6 +713,7 @@ export function useCesium(containerId) {
 			vecImageryLayer = null;
 		}
 		viewer.scene.requestRender();
+		emitPerformanceStats();
 	}
 	// 删除矢量注记
 	function removeCvaLayer(){
@@ -576,6 +723,7 @@ export function useCesium(containerId) {
 			cvaImageryLayer = null;
 		}
 		viewer.scene.requestRender();
+		emitPerformanceStats();
 	}
 	// 删除影像注记
 	function removeCiaLayer() {
@@ -585,6 +733,7 @@ export function useCesium(containerId) {
 			ciaImageryLayer = null;
 		}
 		viewer.scene.requestRender();
+		emitPerformanceStats();
 	}
 	// 删除天地图影像底图
 	function removeImgLayer() {
@@ -594,18 +743,21 @@ export function useCesium(containerId) {
 			imgImageryLayer = null;
 		}
 		viewer.scene.requestRender();
+		emitPerformanceStats();
 	}
 	// 显示 Cesium 默认全球影像
 	function showGlobalImageryLayer() {
 		if (!globalImageryLayer) return;
 		globalImageryLayer.show = true;
 		viewer?.scene?.requestRender();
+		emitPerformanceStats();
 	}
 	// 隐藏 Cesium 默认全球影像，避免与天地图影像叠加
 	function hideGlobalImageryLayer() {
 		if (!globalImageryLayer) return;
 		globalImageryLayer.show = false;
 		viewer?.scene?.requestRender();
+		emitPerformanceStats();
 	}
 
 
@@ -617,6 +769,10 @@ export function useCesium(containerId) {
 
 	// 销毁 Cesium Viewer
 	function destroyCesium() {
+		removeMouseMoveHandler();
+		removeHeadingUpdateHandler();
+		removeScaleUpdateHandler();
+		stopPerformanceMonitor();
 		if (viewer) {
 			stopHomeEarthRotation();
 			if (realtimeLightingHandler) {
@@ -631,6 +787,10 @@ export function useCesium(containerId) {
 		}
 		initialHomeCameraView = null;
 		realtimeLightingLastSyncMs = 0;
+		performanceStats.frameCount = 0;
+		performanceStats.fps = 0;
+		performanceStats.renderRequestCount = 0;
+		performanceStats.renderRequestsPerSecond = 0;
 	}
 
 
@@ -763,6 +923,7 @@ export function useCesium(containerId) {
 			)
 			// 存储模型对象
 			currentTilesetList[url] = tileset;
+			emitPerformanceStats();
 			return tileset; // 返回模型对象
 		} catch (error) {
 			console.error('加载3D Tileset失败:', error);
@@ -781,6 +942,7 @@ export function useCesium(containerId) {
 			viewer.scene.primitives.remove(currentTilesetList[url]);
 			// 从当前模型列表中移除
 			delete currentTilesetList[url];
+			emitPerformanceStats();
 		}
 	}
 
@@ -997,9 +1159,15 @@ export function useCesium(containerId) {
 			return;
 		}
 		viewer.cesiumWidget.screenSpaceEventHandler.setInputAction(function (movement) {
-			const position = movement.endPosition;
-			const cartesian = viewer.camera.pickEllipsoid(position, viewer.scene.globe.ellipsoid);
-			if (cartesian) {
+			pendingMouseMovePosition = movement.endPosition;
+			if (mouseMoveFrameId != null) return;
+			mouseMoveFrameId = window.requestAnimationFrame(() => {
+				mouseMoveFrameId = null;
+				if (!viewer || !pendingMouseMovePosition) return;
+				const position = pendingMouseMovePosition;
+				pendingMouseMovePosition = null;
+				const cartesian = viewer.camera.pickEllipsoid(position, viewer.scene.globe.ellipsoid);
+				if (!cartesian) return;
 				const cartographic = Cesium.Cartographic.fromCartesian(cartesian);
 				const coordinates = {
 					longitude: Cesium.Math.toDegrees(cartographic.longitude),
@@ -1007,7 +1175,7 @@ export function useCesium(containerId) {
 					height: cartographic.height
 				};
 				if (typeof callback === 'function') callback(coordinates);
-			}
+			});
 		}, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
 	}
 
@@ -1016,38 +1184,62 @@ export function useCesium(containerId) {
 			console.error('Viewer未初始化');
 			return;
 		}
+		if (mouseMoveFrameId != null) {
+			window.cancelAnimationFrame(mouseMoveFrameId);
+			mouseMoveFrameId = null;
+		}
+		pendingMouseMovePosition = null;
 		viewer.cesiumWidget.screenSpaceEventHandler.removeInputAction(Cesium.ScreenSpaceEventType.MOUSE_MOVE);
 	}
 
 	// 航向更新（相机朝向角，单位度）
-	let postRenderHandler = null;
-	function addHeadingUpdateHandler(callback) {
+	function addHeadingUpdateHandler(callback, options = {}) {
 		if (!viewer) {
 			console.error('Viewer未初始化');
 			return;
 		}
-		postRenderHandler = function () {
+		removeHeadingUpdateHandler();
+		const intervalMs = Math.max(16, Number(options.intervalMs) || HEADING_UPDATE_INTERVAL_MS);
+		let lastRunAt = 0;
+		const postRenderHandler = () => {
+			if (!viewer) return;
+			const now = Date.now();
+			if (now - lastRunAt < intervalMs) return;
+			lastRunAt = now;
 			const headingRad = viewer.camera.heading;
 			const headingDeg = Cesium.Math.toDegrees(headingRad);
 			if (typeof callback === 'function') callback(headingDeg);
 		};
 		viewer.scene.postRender.addEventListener(postRenderHandler);
+		headingUpdateCleanup = () => {
+			if (viewer) {
+				viewer.scene.postRender.removeEventListener(postRenderHandler);
+			}
+		};
+		postRenderHandler();
 	}
 
 	function removeHeadingUpdateHandler() {
-		if (!viewer || !postRenderHandler) return;
-		viewer.scene.postRender.removeEventListener(postRenderHandler);
-		postRenderHandler = null;
+		if (typeof headingUpdateCleanup === 'function') {
+			headingUpdateCleanup();
+		}
+		headingUpdateCleanup = null;
 	}
 
 	// 比例尺与层级（缩放级别）更新
-	let postRenderScaleHandler = null;
-	function addScaleUpdateHandler(callback) {
+	function addScaleUpdateHandler(callback, options = {}) {
 		if (!viewer) {
 			console.error('Viewer未初始化');
 			return;
 		}
-		postRenderScaleHandler = function () {
+		removeScaleUpdateHandler();
+		const intervalMs = Math.max(16, Number(options.intervalMs) || SCALE_UPDATE_INTERVAL_MS);
+		let lastRunAt = 0;
+		const postRenderScaleHandler = () => {
+			if (!viewer) return;
+			const now = Date.now();
+			if (now - lastRunAt < intervalMs) return;
+			lastRunAt = now;
 			const scene = viewer.scene;
 			const canvas = scene.canvas;
 			const ellipsoid = scene.globe.ellipsoid;
@@ -1084,12 +1276,19 @@ export function useCesium(containerId) {
 			}
 		};
 		viewer.scene.postRender.addEventListener(postRenderScaleHandler);
+		scaleUpdateCleanup = () => {
+			if (viewer) {
+				viewer.scene.postRender.removeEventListener(postRenderScaleHandler);
+			}
+		};
+		postRenderScaleHandler();
 	}
 
 	function removeScaleUpdateHandler() {
-		if (!viewer || !postRenderScaleHandler) return;
-		viewer.scene.postRender.removeEventListener(postRenderScaleHandler);
-		postRenderScaleHandler = null;
+		if (typeof scaleUpdateCleanup === 'function') {
+			scaleUpdateCleanup();
+		}
+		scaleUpdateCleanup = null;
 	}
 
 
@@ -1109,6 +1308,8 @@ export function useCesium(containerId) {
 		removeHeadingUpdateHandler,
 		addScaleUpdateHandler,
 		removeScaleUpdateHandler,
+		subscribePerformanceStats,
+		getPerformanceStats,
 		addVecLayer,
 		addCvaLayer,
 		addCiaLayer,

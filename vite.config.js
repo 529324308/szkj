@@ -9,11 +9,21 @@
 import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
 import cesium from 'vite-plugin-cesium';
+import path from 'node:path';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+const cesiumPackageDir = path.dirname(require.resolve('cesium/package.json'));
+const cesiumBuildRootPath = path.join(cesiumPackageDir, 'Build');
+const cesiumBuildPath = path.join(cesiumBuildRootPath, 'Cesium');
 
 export default defineConfig({
   plugins: [
     vue(),
-    cesium(), // 添加 Cesium 插件
+    cesium({
+      cesiumBuildRootPath,
+      cesiumBuildPath,
+    }), // 添加 Cesium 插件
   ],
   resolve: {
     alias: {
@@ -26,9 +36,6 @@ export default defineConfig({
         sourcePrefix: '', // 解决 Cesium 源代码空格问题
       },
     },
-  },
-  define: {
-    CESIUM_BASE_URL: JSON.stringify('/'), // Cesium 资源基础路径
   },
   server: {
     host: '0.0.0.0', // 允许通过本地网络访问

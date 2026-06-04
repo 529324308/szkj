@@ -189,6 +189,44 @@
 			<div class="dibu_tool_btn zhinanzhen" :style="{ transform: 'rotate(' + compassRotation + 'deg)' }"></div>
 		</div>
 
+		<div v-if="showPerformanceMonitor" class="performance-monitor">
+			<div class="performance-monitor__title">性能监控</div>
+			<div class="performance-monitor__grid">
+				<div class="performance-monitor__item">
+					<span>FPS</span>
+					<strong>{{ performanceMonitor.fps.toFixed(1) }}</strong>
+				</div>
+				<div class="performance-monitor__item">
+					<span>相机</span>
+					<strong>{{ performanceMonitor.cameraMoving ? '移动中' : '静止' }}</strong>
+				</div>
+				<div class="performance-monitor__item">
+					<span>3D Tiles</span>
+					<strong>{{ performanceMonitor.tilesetCount }}</strong>
+				</div>
+				<div class="performance-monitor__item">
+					<span>数据源</span>
+					<strong>{{ performanceMonitor.dataSourceCount }}</strong>
+				</div>
+				<div class="performance-monitor__item">
+					<span>渲染请求</span>
+					<strong>{{ performanceMonitor.renderRequestsPerSecond.toFixed(1) }}/s</strong>
+				</div>
+				<div class="performance-monitor__item">
+					<span>累计请求</span>
+					<strong>{{ performanceMonitor.renderRequestCount }}</strong>
+				</div>
+				<div class="performance-monitor__item">
+					<span>影像图层</span>
+					<strong>{{ performanceMonitor.imageryLayerCount }}</strong>
+				</div>
+				<div class="performance-monitor__item">
+					<span>地形</span>
+					<strong>{{ performanceMonitor.terrainMode }}</strong>
+				</div>
+			</div>
+		</div>
+
 		<!-- 图层选择悬浮面板 -->
 		<div v-if="layerPanelVisible" ref="layerPanelRef" class="layer-panel" @click.stop>
 			<div class="layer-grid">
@@ -376,6 +414,8 @@ const {
 	removeHeadingUpdateHandler,
 	addScaleUpdateHandler,
 	removeScaleUpdateHandler,
+	subscribePerformanceStats,
+	getPerformanceStats,
 	addVecLayer,
 	addCvaLayer,
 	addCiaLayer,
@@ -448,6 +488,8 @@ const mouseCoords = ref({ longitude: null, latitude: null, height: null });
 const headingDeg = ref(0);
 const scaleBar = reactive({ metersPerPixel: 0, widthPx: 100, label: '100 m', zoom: 0 });
 const compassRotation = computed(() => headingDeg.value - 90);
+const showPerformanceMonitor = import.meta.env.DEV;
+const performanceMonitor = reactive(getPerformanceStats());
 const layerPanelVisible = ref(false);
 const baseLayerActive = ref('天地图');
 const showInfoPanel = ref(false);
@@ -501,6 +543,7 @@ const cadDataSourceMap = new Map();
 let djcxLoadingTimer = null;
 let djcxLoadingToken = 0;
 let djcxMultiSelectedKeys = [];
+let unsubscribePerformanceStats = null;
 
 function normalizeTerrainUrl(url) {
 	return String(url || '').trim();
@@ -4737,6 +4780,11 @@ onMounted(async () => {
 	addMouseMoveHandler(coords => mouseCoords.value = coords);
 	addHeadingUpdateHandler(deg => headingDeg.value = deg);
 	addScaleUpdateHandler(info => { if (info) Object.assign(scaleBar, info); });
+	if (showPerformanceMonitor) {
+		unsubscribePerformanceStats = subscribePerformanceStats((stats) => {
+			Object.assign(performanceMonitor, stats);
+		});
+	}
 	document.addEventListener('click', e => {
 		if (layerPanelVisible.value && !layerPanelRef.value?.contains(e.target) && !layerBtnRef.value?.contains(e.target)) layerPanelVisible.value = false;
 	});
@@ -4749,6 +4797,10 @@ onMounted(async () => {
 onBeforeUnmount(() => {
 	killAiChatTimeline();
 	onAiDragEnd();
+	if (typeof unsubscribePerformanceStats === 'function') {
+		unsubscribePerformanceStats();
+		unsubscribePerformanceStats = null;
+	}
 	removeClickHandler(); removeMouseMoveHandler(); removeHeadingUpdateHandler(); removeScaleUpdateHandler();
 	window.removeEventListener('resize', onShpFeaturePopupResize);
 	window.removeEventListener('pointermove', onShpFeatureHeaderPointerMove);
@@ -5905,6 +5957,59 @@ async function clearAllMeasures() {
 .dibu_tool {
 	width: 150px; height: 35px; position: absolute; bottom: 30px; right: 10px;
 	display: flex; justify-content: center; align-items: center; gap: 10px; z-index: 1;
+}
+
+.performance-monitor {
+	position: absolute;
+	right: 12px;
+	bottom: 78px;
+	width: 220px;
+	padding: 10px 12px;
+	border-radius: 10px;
+	background: rgba(13, 18, 24, 0.88);
+	border: 1px solid rgba(69, 239, 255, 0.25);
+	box-shadow: 0 12px 30px rgba(0, 0, 0, 0.25);
+	backdrop-filter: blur(10px);
+	color: #f8fafc;
+	z-index: 12;
+}
+
+.performance-monitor__title {
+	font-size: 12px;
+	font-weight: 700;
+	letter-spacing: 0;
+	color: #45efff;
+}
+
+.performance-monitor__grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 8px;
+	margin-top: 10px;
+}
+
+.performance-monitor__item {
+	padding: 8px;
+	border-radius: 8px;
+	background: rgba(148, 163, 184, 0.08);
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	min-width: 0;
+}
+
+.performance-monitor__item span {
+	font-size: 11px;
+	color: rgba(226, 232, 240, 0.72);
+}
+
+.performance-monitor__item strong {
+	font-size: 13px;
+	font-weight: 700;
+	color: #ffffff;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
 }
 
 .dibu_tool_btn {
