@@ -66,7 +66,7 @@ import { onBeforeUnmount, onMounted, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { login } from '../api/auth';
 
-const emit = defineEmits(['success', 'preload-complete']);
+const emit = defineEmits(['success']);
 const MESSAGE_OFFSET_TOP = 200;
 const username = ref('');
 const password = ref('');
@@ -74,15 +74,6 @@ const rememberMe = ref(false);
 const loading = ref(false);
 const introDone = ref(false);
 let introTimer = null;
-
-// 预加载加载页背景图
-const loadingBgImage = new Image();
-loadingBgImage.src = new URL('../assets/jz_bg.png', import.meta.url).href;
-
-// 监听背景图加载完成
-loadingBgImage.onload = () => {
-  emit('preload-complete', true);
-};
 
 function onIntroAnimEnd(e) {
   if (e?.animationName !== 'brandLogoIn') return;

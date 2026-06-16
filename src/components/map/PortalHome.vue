@@ -315,11 +315,10 @@
 		</div>
 
 		<section class="portal-home__bottom-bar" aria-label="首页提醒信息">
+			<div v-if="$slots['bottom-monitor']" class="portal-home__bottom-monitor">
+				<slot name="bottom-monitor"></slot>
+			</div>
 			<div class="portal-home__bottom-alerts">
-				<div class="portal-home__bottom-alert-head">
-					<span class="portal-home__bottom-alert-icon"></span>
-					<span class="portal-home__bottom-alert-title">智能检测已开启</span>
-				</div>
 				<div class="portal-home__bottom-alert-track">
 					<div
 						v-for="item in reminders"
@@ -721,9 +720,13 @@ onBeforeUnmount(() => {
 	z-index: 4;
 	pointer-events: none;
 	--portal-home-side-width: min(23vw, 330px);
+	--portal-home-sidebar-width: var(--portal-home-side-width);
+	--portal-home-stats-width: var(--portal-home-side-width);
 	--portal-home-side-gap: 20px;
 	--portal-home-top-metric-width: minmax(0, 300px);
 	--portal-home-top-metrics-max-width: 900px;
+	--portal-home-top-metrics-left-offset: calc(var(--portal-home-sidebar-width) + var(--portal-home-side-gap));
+	--portal-home-top-metrics-right-offset: calc(var(--portal-home-stats-width) + var(--portal-home-side-gap));
 	--portal-home-bottom-bar-height: 50px;
 	--portal-home-horizontal-inset: 0px;
 }
@@ -760,21 +763,24 @@ onBeforeUnmount(() => {
 	transition: transform 360ms ease, opacity 360ms ease;
 }
 
+.portal-home__bottom-bar:has(.portal-home__bottom-monitor) {
+	grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.portal-home__bottom-monitor {
+	display: inline-flex;
+	align-items: center;
+	min-width: 0;
+	flex-shrink: 0;
+}
+
 .portal-home__bottom-alerts {
 	display: flex;
 	align-items: center;
 	gap: 16px;
 	min-width: 0;
 	overflow: hidden;
-}
-
-.portal-home__bottom-alert-head {
-	display: inline-flex;
-	align-items: center;
-	gap: 10px;
-	flex-shrink: 0;
-	padding-right: 16px;
-	border-right: 1px solid rgba(255, 255, 255, 0.12);
+	border-left: 1px solid rgba(255, 255, 255, 0.14);
 }
 
 .portal-home__bottom-alert-icon {
@@ -887,10 +893,9 @@ onBeforeUnmount(() => {
 .portal-home__top-metrics {
 	position: absolute;
 	top: 18px;
-	left: 50%;
-	transform: translate3d(-50%, 0, 0);
-	width: 95%;
-	max-width: var(--portal-home-top-metrics-max-width);
+	left: var(--portal-home-top-metrics-left-offset);
+	right: var(--portal-home-top-metrics-right-offset);
+	transform: translate3d(0, 0, 0);
 	display: grid;
 	grid-template-columns: repeat(4, var(--portal-home-top-metric-width));
 	gap: 16px;
@@ -1032,13 +1037,14 @@ onBeforeUnmount(() => {
 	position: absolute;
 	top: 0;
 	left: 0;
-	width: var(--portal-home-side-width);
+	width: var(--portal-home-sidebar-width);
 	height: 100%;
 	border-radius: 0 4px 4px 0;
 	border: 1px solid rgba(255, 255, 255, 0.18);
 	box-shadow: 0 22px 70px rgba(93, 93, 93, 0.45);
 	backdrop-filter: blur(18px) saturate(160%);
 	-webkit-backdrop-filter: blur(18px) saturate(160%);
+	box-sizing: border-box;
 	transition: transform 360ms ease, opacity 360ms ease;
 	will-change: transform, opacity;
 	pointer-events: auto;
@@ -1295,7 +1301,7 @@ onBeforeUnmount(() => {
 	position: absolute;
 	top: 0;
 	right: 0;
-	width: var(--portal-home-side-width);
+	width: var(--portal-home-stats-width);
 	height: 100%;
 	border-radius: 4px 0 0 4px;
 	border: 1px solid rgba(255, 255, 255, 0.18);
@@ -1338,12 +1344,12 @@ onBeforeUnmount(() => {
 }
 
 .portal-home__stats--expanded {
-	width: min(90vw, calc(100vw - var(--portal-home-side-width) - 40px));
+	width: min(90vw, calc(100vw - var(--portal-home-sidebar-width) - 40px));
 }
 
 @media (max-width: 1400px) {
 	.portal-home__stats--expanded {
-		width: min(78vw, calc(100vw - var(--portal-home-side-width) - 20px));
+		width: min(78vw, calc(100vw - var(--portal-home-sidebar-width) - 20px));
 	}
 }
 
@@ -1511,8 +1517,26 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 1680px) {
+	.portal-home {
+		--portal-home-top-metric-width: minmax(0, 220px);
+		--portal-home-top-metrics-max-width: 928px;
+	}
+
 	.portal-home__top-metrics {
-		grid-template-columns: repeat(4, minmax(0, 220px));
+		grid-template-columns: repeat(4, var(--portal-home-top-metric-width));
+	}
+}
+
+@media (max-width: 1560px) {
+	.portal-home {
+		--portal-home-side-width: min(21vw, 300px);
+		--portal-home-side-gap: 14px;
+		--portal-home-top-metric-width: minmax(0, 204px);
+		--portal-home-top-metrics-max-width: 864px;
+	}
+
+	.portal-home__top-metrics {
+		gap: 12px;
 	}
 }
 
@@ -1534,7 +1558,8 @@ onBeforeUnmount(() => {
 	}
 
 	.portal-home__top-metrics {
-		width: calc(100% - ((var(--portal-home-side-width) + var(--portal-home-side-gap) + 12px) * 2));
+		left: calc(var(--portal-home-top-metrics-left-offset) + 12px);
+		right: calc(var(--portal-home-top-metrics-right-offset) + 12px);
 	}
 
 	.portal-home__bottom-alert:nth-child(3) {
@@ -1585,6 +1610,10 @@ onBeforeUnmount(() => {
 		padding: 0 12px;
 	}
 
+	.portal-home__bottom-bar:has(.portal-home__bottom-monitor) {
+		grid-template-columns: auto minmax(0, 1fr);
+	}
+
 	.portal-home--collapsing .portal-home__top-metrics,
 	.portal-home--entering .portal-home__top-metrics {
 		transform: translate3d(0, -110%, 0);
@@ -1601,10 +1630,6 @@ onBeforeUnmount(() => {
 	.portal-home__bottom-alert:nth-child(2),
 	.portal-home__bottom-alert:nth-child(3) {
 		display: none;
-	}
-
-	.portal-home__bottom-alert-head {
-		padding-right: 12px;
 	}
 
 	.portal-home__bottom-meta {

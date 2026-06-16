@@ -30,7 +30,7 @@
 		@click.stop
 	>
 		<!-- 历史对话列表侧边栏 -->
-		<aside ref="chatHistorySidebarRef" class="chat-history-sidebar" :class="{ 'is-open': historyVisible, 'is-mobile': isMobileView }">
+		<aside v-if="false" ref="chatHistorySidebarRef" class="chat-history-sidebar" :class="{ 'is-open': historyVisible, 'is-mobile': isMobileView }">
 			<div class="sidebar-header">
 				<span class="sidebar-title">历史对话</span>
 				<button class="sidebar-close-btn" @click="toggleHistory" title="关闭">
@@ -81,7 +81,7 @@
 				<div class="header-left">
 					<!-- 展开历史列表按钮 -->
 					<button
-						v-if="(!historyVisible || isMobileView) && aiChatMaximized"
+						v-if="false"
 						class="header-btn history-toggle-btn"
 						title="显示历史对话"
 						@mousedown.stop
@@ -93,10 +93,41 @@
 
 					<div class="ai-title">
 						<img :src="icons.ai" alt="AI" class="ai-avatar" />
-						<div class="ai-title-copy">
+						<div class="ai-title-copy" v-if="false">
 							<div class="ai-title-main">智能 AI 对话</div>
 							<div class="ai-title-sub">{{ currentModelLabel }}</div>
 						</div>
+						<button
+							v-if="aiChatMaximized"
+							class="ai-title-toggle"
+							:title="historyVisible ? '关闭历史对话' : '显示历史对话'"
+							@mousedown.stop
+							@touchstart.stop
+							@click.stop="toggleHistory"
+						>
+							<img
+								:src="historyVisible ? icons.sidebarClose : icons.sidebarOpen"
+								:alt="historyVisible ? '关闭边栏' : '打开边栏'"
+								class="action-icon"
+							/>
+						</button>
+					</div>
+					<div
+						v-if="showModelPicker"
+						class="header-model-picker"
+						@mousedown.stop
+						@click.stop
+						@touchstart.stop
+					>
+						<el-select
+							v-model="selectedModel"
+							:disabled="isLoading"
+							placeholder="选择模型"
+							size="small"
+							@change="applySelectedModel"
+						>
+							<el-option v-for="model in availableModels" :key="model" :label="model" :value="model" />
+						</el-select>
 					</div>
 				</div>
 
@@ -217,6 +248,87 @@
 					</div>
 				</div>
 			</div>
+
+			<!--
+			<aside ref="chatHistorySidebarRef" class="chat-history-sidebar" :class="{ 'is-open': historyVisible, 'is-mobile': isMobileView }">
+				<div class="sidebar-header">
+					<span class="sidebar-title">鍘嗗彶瀵硅瘽</span>
+					<button class="sidebar-close-btn" @click="toggleHistory" title="鍏抽棴">
+						<img :src="icons.close" alt="鍏抽棴" />
+					</button>
+				</div>
+				<div class="sidebar-actions">
+					<button class="new-chat-btn" @click="createNewChat">
+						<img :src="icons.add" alt="鏂板缓" />
+						<span>鏂板缓瀵硅瘽</span>
+					</button>
+				</div>
+				<div class="history-list">
+					<div
+						v-for="chat in chatHistoryList"
+						:key="chat.id"
+						:class="['history-item', { active: chat.id === currentChatId }]"
+						@click="switchToChat(chat.id)"
+					>
+						<div class="history-item-icon">
+							<img :src="icons.chat" alt="瀵硅瘽" />
+						</div>
+						<div class="history-item-content">
+							<div class="history-item-title">{{ chat.title || '鏈懡鍚嶅璇? }}</div>
+							<div class="history-item-time">{{ formatTime(chat.updatedAt) }}</div>
+						</div>
+						<button
+							class="history-item-delete"
+							@click.stop="deleteChat(chat.id)"
+							title="鍒犻櫎"
+						>
+							<img :src="icons.delete" alt="鍒犻櫎" />
+						</button>
+					</div>
+					<div v-if="chatHistoryList.length === 0" class="history-empty">
+						鏆傛棤鍘嗗彶瀵硅瘽
+					</div>
+				</div>
+			</aside>
+			-->
+			<aside ref="chatHistorySidebarRef" class="chat-history-sidebar" :class="{ 'is-open': historyVisible, 'is-mobile': isMobileView }">
+				<div class="sidebar-header">
+					<span class="sidebar-title">历史对话</span>
+					<button class="sidebar-close-btn" @click="toggleHistory" title="关闭">
+						<img :src="icons.close" alt="关闭" />
+					</button>
+				</div>
+				<div class="sidebar-actions">
+					<button class="new-chat-btn" @click="createNewChat">
+						<img :src="icons.add" alt="新建" />
+						<span>新建对话</span>
+					</button>
+				</div>
+				<div class="history-list">
+					<div
+						v-for="chat in chatHistoryList"
+						:key="chat.id"
+						:class="['history-item', { active: chat.id === currentChatId }]"
+						@click="switchToChat(chat.id)"
+					>
+						<div class="history-item-icon">
+							<img :src="icons.chat" alt="对话" />
+						</div>
+						<div class="history-item-content">
+							<div class="history-item-title">{{ chat.title || '未命名对话' }}</div>
+							<div class="history-item-time">{{ formatTime(chat.updatedAt) }}</div>
+						</div>
+						<button
+							class="history-item-delete"
+							@click.stop="deleteChat(chat.id)"
+							title="删除"
+						>
+							<img :src="icons.delete" alt="删除" />
+						</button>
+					</div>
+					<div v-if="chatHistoryList.length === 0" class="history-empty">暂无历史对话</div>
+				</div>
+			</aside>
 		</div>
 	</div>
 </template>
@@ -224,11 +336,13 @@
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 
-const OLLAMA_BASE_URL = 'http://localhost:11434';
+const OLLAMA_BASE_URL = 'http://192.168.1.43:11434';
 const MODEL_STORAGE_KEY = 'smart-analysis-ollama-model';
+const MODEL_LIST_STORAGE_KEY = 'smart-analysis-ollama-model-list';
 const CHAT_LIST_STORAGE_KEY = 'smart-analysis-ollama-chat-list';
 const DEFAULT_MODELS = ['qwen2.5:7b', 'qwen3.5:9b', 'deepseek-r1:8b', 'vuemaster:latest'];
-const DEFAULT_MODEL = localStorage.getItem(MODEL_STORAGE_KEY) || DEFAULT_MODELS[0];
+const CACHED_MODEL_LIST = loadCachedModelList();
+const DEFAULT_MODEL = localStorage.getItem(MODEL_STORAGE_KEY) || CACHED_MODEL_LIST[0] || DEFAULT_MODELS[0];
 const CONNECTION_ERROR_TEXT = '当前无法连接本地模型，请确认 Ollama 已启动，并且所选模型已经安装。';
 const CURRENT_CHAT_ID_KEY = 'smart-analysis-ollama-current-chat-id';
 const MOBILE_BREAKPOINT = 768;
@@ -278,7 +392,7 @@ const aiChatMainRef = ref(null);
 const aiChatHeaderRef = ref(null);
 const draft = ref('');
 const selectedModel = ref(DEFAULT_MODEL);
-const availableModels = ref([...new Set([DEFAULT_MODEL, ...DEFAULT_MODELS])]);
+const availableModels = ref(CACHED_MODEL_LIST.length ? CACHED_MODEL_LIST : [...new Set([DEFAULT_MODEL, ...DEFAULT_MODELS])]);
 const statusText = ref('正在连接本地模型...');
 const statusTone = ref('neutral');
 const userError = ref('');
@@ -309,6 +423,7 @@ watch(
 
 const visibleMessages = computed(() => messages.value);
 const canSend = computed(() => Boolean(draft.value.trim()) && !isLoading.value);
+const showModelPicker = computed(() => import.meta.env.DEV && availableModels.value.length > 1);
 const currentModelLabel = computed(() => selectedModel.value || '未选择模型');
 const noticeText = computed(() => userError.value || statusText.value);
 const noticeTone = computed(() => (userError.value ? 'warning' : statusTone.value));
@@ -489,6 +604,28 @@ function applySelectedModel() {
 	statusTone.value = 'success';
 }
 
+function loadCachedModelList() {
+	try {
+		const raw = localStorage.getItem(MODEL_LIST_STORAGE_KEY);
+		if (!raw) return [];
+		const list = JSON.parse(raw);
+		return Array.isArray(list) ? [...new Set(list.filter(Boolean))] : [];
+	} catch {
+		localStorage.removeItem(MODEL_LIST_STORAGE_KEY);
+		return [];
+	}
+}
+
+function saveCachedModelList(list) {
+	const normalized = Array.isArray(list) ? [...new Set(list.filter(Boolean))] : [];
+	if (normalized.length) {
+		localStorage.setItem(MODEL_LIST_STORAGE_KEY, JSON.stringify(normalized));
+		return;
+	}
+
+	localStorage.removeItem(MODEL_LIST_STORAGE_KEY);
+}
+
 async function loadModels() {
 	if (loadingModels.value) return;
 	loadingModels.value = true;
@@ -504,8 +641,8 @@ async function loadModels() {
 		const models = Array.isArray(result?.models)
 			? result.models.map((item) => item?.name).filter(Boolean)
 			: [];
-		const merged = [...new Set([...models, ...DEFAULT_MODELS, selectedModel.value].filter(Boolean))];
-		availableModels.value = merged.length ? merged : [...DEFAULT_MODELS];
+		saveCachedModelList(models);
+		availableModels.value = models.length ? models : [...DEFAULT_MODELS];
 
 		if (!availableModels.value.includes(selectedModel.value)) {
 			selectedModel.value = availableModels.value[0];
@@ -517,7 +654,10 @@ async function loadModels() {
 			: '已连接，可直接开始对话';
 		statusTone.value = 'success';
 	} catch {
-		availableModels.value = [...new Set([selectedModel.value, ...DEFAULT_MODELS])];
+		const cachedModels = loadCachedModelList();
+		availableModels.value = cachedModels.length
+			? cachedModels
+			: [...new Set([selectedModel.value, ...DEFAULT_MODELS])];
 		statusText.value = '未检测到本地模型服务，当前保留默认模型列表';
 		statusTone.value = 'warning';
 	} finally {
@@ -984,7 +1124,6 @@ defineExpose({
 	justify-content: space-between;
 	align-items: center;
 	padding: 12px 16px;
-	border-bottom: 1px solid #edf1f5;
 	background: #ffffff;
 	cursor: move;
 	flex-shrink: 0;
@@ -1004,6 +1143,38 @@ defineExpose({
 	min-width: 0;
 }
 
+.header-model-picker {
+	width: 220px;
+	flex-shrink: 0;
+	position: absolute;
+	right: 200px;
+}
+
+.header-model-picker :deep(.el-select) {
+	width: 100%;
+}
+
+.header-model-picker :deep(.el-select__wrapper) {
+	min-height: 32px;
+	border-radius: 999px;
+	background: #f8fafc;
+	box-shadow: inset 0 0 0 1px #d8dee6;
+}
+
+.header-model-picker :deep(.el-select__wrapper.is-focused) {
+	box-shadow: inset 0 0 0 1px #111827;
+}
+
+.header-model-picker :deep(.el-select__placeholder),
+.header-model-picker :deep(.el-select__selected-item) {
+	font-size: 12px;
+	color: #1f2937;
+}
+
+.header-model-picker :deep(.el-select__caret) {
+	color: #64748b;
+}
+
 .history-toggle-btn {
 	margin-right: 4px;
 }
@@ -1014,11 +1185,7 @@ defineExpose({
 	flex: 1;
 	min-width: 0;
 	min-height: 0;
-	transition: padding-left 0.26s ease;
-}
-
-.ai-chat-panel.sidebar-open .ai-chat-main {
-	padding-left: 200px;
+	position: relative;
 }
 
 .ai-title {
@@ -1026,6 +1193,35 @@ defineExpose({
 	align-items: center;
 	gap: 10px;
 	min-width: 0;
+	cursor: pointer;
+	position: relative;
+}
+
+.ai-title-toggle {
+	width: 28px;
+	height: 28px;
+	padding: 0;
+	border: 1px solid #d5dbe3;
+	border-radius: 8px;
+	background: #fff;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	cursor: pointer;
+	opacity: 0;
+	pointer-events: none;
+	transition: opacity 0.2s ease, border-color 0.2s ease, background 0.2s ease;
+}
+
+.ai-title:hover .ai-title-toggle,
+.ai-title:focus-within .ai-title-toggle {
+	opacity: 1;
+	pointer-events: auto;
+}
+
+.ai-title-toggle:hover {
+	border-color: #94a3b8;
+	background: #f8fafc;
 }
 
 .ai-avatar {
@@ -1079,6 +1275,11 @@ defineExpose({
 	flex-direction: column;
 	background: #f7f7f8;
 	overflow: hidden;
+	transition: padding-left 0.26s ease;
+}
+
+.ai-chat-panel.sidebar-open .ai-chat-body {
+	padding-left: 200px;
 }
 
 .chat-notice {
@@ -1159,8 +1360,8 @@ defineExpose({
 	border-radius: 999px;
 	overflow: hidden;
 	flex-shrink: 0;
-	background: #f3f4f6;
-	border: 1px solid #e5e7eb;
+	/* background: #f3f4f6; */
+	/* border: 1px solid #e5e7eb; */
 }
 
 .chat-avatar img {
@@ -1386,6 +1587,7 @@ defineExpose({
 
 .primary-btn:disabled,
 .secondary-btn:disabled,
+.header-model-select:disabled,
 .model-select:disabled {
 	opacity: 0.5;
 	cursor: not-allowed;
@@ -1426,12 +1628,11 @@ defineExpose({
 .chat-history-sidebar {
 	position: absolute;
 	left: 0;
-	top: 58px;
+	top: 54px;
 	bottom: 0;
 	z-index: 4;
 	width: 200px;
-	background: #fafbfc;
-	border-right: 1px solid #e8ecf0;
+	background: #fff;
 	display: flex;
 	flex-direction: column;
 	flex-shrink: 0;
@@ -1564,7 +1765,7 @@ defineExpose({
 	width: 28px;
 	height: 28px;
 	border-radius: 8px;
-	background: #f3f4f6;
+	/* background: #f3f4f6; */
 	display: flex;
 	align-items: center;
 	justify-content: center;
@@ -1652,7 +1853,7 @@ defineExpose({
 		width: 260px;
 	}
 
-	.ai-chat-panel.sidebar-open .ai-chat-main {
+	.ai-chat-panel.sidebar-open .ai-chat-body {
 		padding-left: 0;
 	}
 }

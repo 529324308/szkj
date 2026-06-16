@@ -13,8 +13,32 @@ const TDT_TERRAIN_TOKEN = '539153113b6e29d0d974db407e831022';
 const TDT_TERRAIN_URL = 'https://t{s}.tianditu.gov.cn/';
 const TDT_SUBDOMAINS = ['0', '1', '2', '3', '4', '5', '6', '7'];
 
-export function useCesium(containerId) {
+const DEFAULT_RENDER_PRESET = {
+	tier: 'balanced',
+	pixelRatioLimit: 1.5,
+	enableTerrainOnStart: false,
+	enableShadows: false,
+	enableHighDynamicRange: false,
+	enableLighting: false,
+	tilesetMaximumScreenSpaceError: 20,
+	movingMaximumScreenSpaceError: 32,
+	lazyLoadTerrain: true,
+	lazyLoadTilesets: true,
+};
+
+function normalizeRenderPreset(preset = {}) {
+	return {
+		...DEFAULT_RENDER_PRESET,
+		...(preset || {}),
+		pixelRatioLimit: Number(preset?.pixelRatioLimit) || DEFAULT_RENDER_PRESET.pixelRatioLimit,
+		tilesetMaximumScreenSpaceError: Number(preset?.tilesetMaximumScreenSpaceError) || DEFAULT_RENDER_PRESET.tilesetMaximumScreenSpaceError,
+		movingMaximumScreenSpaceError: Number(preset?.movingMaximumScreenSpaceError) || DEFAULT_RENDER_PRESET.movingMaximumScreenSpaceError,
+	};
+}
+
+export function useCesium(containerId, options = {}) {
 	let viewer = null;
+	let activeRenderPreset = normalizeRenderPreset(options.renderPreset);
 
 	Cesium.Ion.defaultAccessToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiIwYTFjN2Y4Mi00ODRlLTQ0ZTQtYTgyOC05OTQ0ZmE2NTg1ZGQiLCJpZCI6MzM1MDUsImlhdCI6MTczNDMzMzQ0NX0.VljS3bQxdRzPM_XUcKsIbEx6B-xTpACL9Z2bWNKpMjc';
 	// 设置默认视角为中国区域 (西经, 南纬, 东经, 北纬)
@@ -205,6 +229,25 @@ export function useCesium(containerId) {
 			performanceMonitorCleanup();
 		}
 		cameraMoving = false;
+	}
+
+	function getRenderPreset() {
+		return { ...activeRenderPreset };
+	}
+
+	function setRenderPreset(preset = {}) {
+		activeRenderPreset = normalizeRenderPreset(preset);
+		if (viewer?.resolutionScale !== undefined) {
+			const dpr = window.devicePixelRatio || 1;
+			viewer.resolutionScale = Math.min(dpr, activeRenderPreset.pixelRatioLimit) / dpr;
+		}
+		if (viewer?.scene) {
+			viewer.scene.highDynamicRange = !!activeRenderPreset.enableHighDynamicRange;
+			viewer.shadows = !!activeRenderPreset.enableShadows;
+			if (viewer.scene.shadowMap) viewer.scene.shadowMap.enabled = !!activeRenderPreset.enableShadows;
+			viewer.scene.requestRender();
+		}
+		return getRenderPreset();
 	}
 
 	function createFallbackTerrainData(provider, x, y, level) {
@@ -624,7 +667,10 @@ export function useCesium(containerId) {
 	}
 
 	// 初始化 Cesium Viewer
-	function initCesium() {
+	function initCesium(renderPresetPatch = null) {
+		if (renderPresetPatch) {
+			activeRenderPreset = normalizeRenderPreset(renderPresetPatch);
+		}
 		viewer = new Cesium.Viewer(containerId, {
 			animation:false, //是否打开创建动画小控件，即左下角的仪表
 			baseLayerPicker:false,//是否显示图层选择器
@@ -637,8 +683,11 @@ export function useCesium(containerId) {
 			timeline: false, //是否关闭时间线
 			navigationHelpButton: false, // 帮助提示
 		});
+		setRenderPreset(activeRenderPreset);
 		// 隐藏版权信息
 		viewer._cesiumWidget._creditContainer.style.display = 'none';
+		// 禁用默认的双击锁定事件（在数治测绘中用于结束绘制）
+		viewer.cesiumWidget.screenSpaceEventHandler.removeInputAction(Cesium.ScreenSpaceEventType.LEFT_DOUBLE_CLICK);
 		globalImageryLayer = viewer.imageryLayers.get(0) || null;
 		// 调整地图对比度
 		const imageryLayer = viewer.imageryLayers.get(0); // 获取第一个图层
@@ -657,9 +706,12 @@ export function useCesium(containerId) {
 		hideGlobalImageryLayer();
 		addImgLayer();
 
-		// 默认关闭地形，按需切换到网络地形
-		disableTerrain();
-		enableRealtimeLighting();
+		// 默认按加载页档位配置地形和光照
+		if (activeRenderPreset.enableTerrainOnStart) enableNetworkTerrain();
+		else disableTerrain();
+		if (activeRenderPreset.enableLighting) enableRealtimeLighting();
+		else disableRealtimeLighting();
+		setRenderPreset(activeRenderPreset);
 		captureInitialHomeCameraView(true);
 		startPerformanceMonitor();
 
@@ -810,7 +862,7 @@ export function useCesium(containerId) {
 		try {
 			const tilesetLoadOptions = {
 				// 控制模型清晰度与加载压力的平衡，数值越小越清晰，但请求和渲染压力越大
-				maximumScreenSpaceError: options.maximumScreenSpaceError ?? 16,
+				maximumScreenSpaceError: options.maximumScreenSpaceError ?? activeRenderPreset.tilesetMaximumScreenSpaceError,
 				// 显式限制缓存目标大小（字节），避免近景时缓存无限膨胀导致显存抖动
 				cacheBytes: options.cacheBytes ?? 536870912,
 				// 限制缓存超量上浮空间，减少总内存占用飙升到 1GB 以上
@@ -865,7 +917,7 @@ export function useCesium(containerId) {
 			// 显式确保模型加载后处于显示状态
 			tileset.show = true;
 			const idleMaximumScreenSpaceError = options.idleMaximumScreenSpaceError ?? tileset.maximumScreenSpaceError;
-			const movingMaximumScreenSpaceError = options.movingMaximumScreenSpaceError ?? Math.max(idleMaximumScreenSpaceError, 28);
+			const movingMaximumScreenSpaceError = options.movingMaximumScreenSpaceError ?? Math.max(idleMaximumScreenSpaceError, activeRenderPreset.movingMaximumScreenSpaceError);
 			const restoreDetailDelayMs = options.restoreDetailDelayMs ?? 180;
 			let restoreDetailTimer = null;
 			const applyMovingDetailStrategy = () => {
@@ -1310,6 +1362,8 @@ export function useCesium(containerId) {
 		removeScaleUpdateHandler,
 		subscribePerformanceStats,
 		getPerformanceStats,
+		setRenderPreset,
+		getRenderPreset,
 		addVecLayer,
 		addCvaLayer,
 		addCiaLayer,

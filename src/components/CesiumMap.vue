@@ -64,7 +64,19 @@
 			:icons="icons"
 			:active-nav-key="activeTopTab"
 			@enter-module="enterModule"
-		/>
+		>
+			<template #bottom-monitor>
+				<button
+					class="performance-monitor-pill performance-monitor-pill--home"
+					:class="`performance-monitor-pill--${performanceHealth.level}`"
+					type="button"
+					@click.stop="togglePerformanceMonitor"
+				>
+					<span class="performance-monitor-pill__dot"></span>
+					<span>性能检测已开启</span>
+				</button>
+			</template>
+		</PortalHome>
 
 		<!-- 2. 数治测绘模块 -->
 		<Home 
@@ -153,6 +165,13 @@
 			:class="{ 'module-appear': moduleEnterKey === 'sjgl' }"
 			:active="activeTopTab === 'sjgl'" 
 			:icons="icons"
+			@inspection-task-selected="handleInspectionTaskSelected"
+			@inspection-task-cleared="handleInspectionTaskCleared"
+			@inspection-route-locate="handleInspectionRouteLocate"
+			@inspection-route-issues="handleInspectionRouteIssues"
+			@inspection-track-show="handleInspectionTrackShow"
+			@inspection-track-progress="handleInspectionTrackProgress"
+			@inspection-track-hide="handleInspectionTrackHide"
 		/>
 
 		<!-- 6. 个人中心模块 -->
@@ -160,9 +179,19 @@
 
 		<!-- 底部显示经纬度 -->
 		<div v-if="activeTopTab !== 'home'" class="dibu">
-			<span style="margin-left: 20px; font-size: 12px;">经度: {{ mouseCoords.longitude !== null ?
+			<button
+				v-if="showPerformanceMonitor"
+				class="performance-monitor-pill performance-monitor-pill--status"
+				:class="`performance-monitor-pill--${performanceHealth.level}`"
+				type="button"
+				@click.stop="togglePerformanceMonitor"
+			>
+				<span class="performance-monitor-pill__dot"></span>
+				<span>性能检测已开启</span>
+			</button>
+			<span class="dibu__coord">经度: {{ mouseCoords.longitude !== null ?
 				mouseCoords.longitude.toFixed(6) + '°' : '--' }}</span>
-			<span style="margin-left: 20px; font-size: 12px;">纬度: {{ mouseCoords.latitude !== null ?
+			<span class="dibu__coord">纬度: {{ mouseCoords.latitude !== null ?
 				mouseCoords.latitude.toFixed(6) + '°' : '--' }}</span>
 		</div>
 
@@ -183,14 +212,45 @@
 		</div>
 
 		<!-- 底部工具按钮 -->
-		<div class="dibu_tool">
+		<div v-if="activeTopTab !== 'home'" class="dibu_tool">
 			<div class="dibu_tool_btn dingwei" @click="locateToMe"></div>
 			<div class="dibu_tool_btn tuceng" ref="layerBtnRef" @click="toggleLayerPanel"></div>
 			<div class="dibu_tool_btn zhinanzhen" :style="{ transform: 'rotate(' + compassRotation + 'deg)' }"></div>
 		</div>
 
-		<div v-if="showPerformanceMonitor" class="performance-monitor">
-			<div class="performance-monitor__title">性能监控</div>
+		<div
+			v-if="!performanceMonitorMinimized"
+			class="performance-monitor"
+			:class="`performance-monitor--${performanceHealth.level}`"
+			:style="performanceMonitorStyle"
+		>
+			<div class="performance-monitor__head" @pointerdown.prevent="onPerformanceMonitorPointerDown">
+				<div class="performance-monitor__title-wrap">
+					<span class="performance-monitor__status-dot"></span>
+					<div>
+						<div class="performance-monitor__title">性能监控</div>
+						<div class="performance-monitor__subtitle">{{ performanceHealth.text }}</div>
+					</div>
+				</div>
+				<button class="performance-monitor__min-btn" type="button" @pointerdown.stop @click.stop="minimizePerformanceMonitor">−</button>
+			</div>
+			<div class="performance-monitor__chart">
+				<svg viewBox="0 0 240 72" preserveAspectRatio="none" aria-label="FPS 波动图">
+					<line x1="0" y1="18" x2="240" y2="18" class="performance-monitor__chart-guide" />
+					<line x1="0" y1="36" x2="240" y2="36" class="performance-monitor__chart-guide" />
+					<line x1="0" y1="54" x2="240" y2="54" class="performance-monitor__chart-guide" />
+					<polyline :points="performanceFpsChartPoints" class="performance-monitor__chart-line" />
+				</svg>
+				<div class="performance-monitor__chart-meta">
+					<span>{{ performanceFpsChartScale.min }}-{{ performanceFpsChartScale.max }} FPS</span>
+					<span>均值 {{ performanceFpsStats.average.toFixed(1) }}</span>
+					<span>波动 {{ performanceFpsStats.jitter.toFixed(1) }}</span>
+				</div>
+			</div>
+			<div class="performance-monitor__reason">
+				<span>波动原因</span>
+				<strong>{{ performanceIssueReason }}</strong>
+			</div>
 			<div class="performance-monitor__grid">
 				<div class="performance-monitor__item">
 					<span>FPS</span>
@@ -224,11 +284,19 @@
 					<span>地形</span>
 					<strong>{{ performanceMonitor.terrainMode }}</strong>
 				</div>
+				<div class="performance-monitor__item">
+					<span>Primitives</span>
+					<strong>{{ performanceMonitor.primitiveCount }}</strong>
+				</div>
+				<div class="performance-monitor__item">
+					<span>采样时间</span>
+					<strong>{{ performanceMonitorSampleTime }}</strong>
+				</div>
 			</div>
 		</div>
 
 		<!-- 图层选择悬浮面板 -->
-		<div v-if="layerPanelVisible" ref="layerPanelRef" class="layer-panel" @click.stop>
+		<div v-if="activeTopTab !== 'home' && layerPanelVisible" ref="layerPanelRef" class="layer-panel" @click.stop>
 			<div class="layer-grid">
 				<div class="layer-card" :class="{ active: baseLayerActive === '全球影像' }" @click="setBaseLayer('全球影像')">
 					<div class="thumb thumb-satellite"></div>
@@ -351,10 +419,24 @@ import SmartAnalysis from './map/SmartAnalysis.vue';
 import DataManagement from './map/DataManagement.vue';
 import PersonalCenter from './map/PersonalCenter.vue';
 
+const props = defineProps({
+	deviceProfile: {
+		type: Object,
+		default: null,
+	},
+	renderPreset: {
+		type: Object,
+		default: null,
+	},
+});
 const emit = defineEmits(['logout', 'ready']);
 const TERRAIN_INPUT_STORAGE_KEY = 'terrainInputUrl';
 const TERRAIN_NAME_STORAGE_KEY = 'terrainInputName';
 const MESSAGE_OFFSET_TOP = 200;
+const AI_CHAT_ICON_PATH = 'M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456ZM16.894 20.567 16.5 21.75l-.394-1.183a2.25 2.25 0 0 0-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 0 0 1.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 0 0 1.423 1.423l1.183.394-1.183.394a2.25 2.25 0 0 0-1.423 1.423Z';
+const AI_CHAT_ICON = `data:image/svg+xml;utf8,${encodeURIComponent(
+	`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#000000" d="${AI_CHAT_ICON_PATH}"/></svg>`
+)}`;
 
 // 工具栏图标
 const icons = {
@@ -399,6 +481,10 @@ const icons = {
 	searchChat: new URL('../assets/搜索对话内容.png', import.meta.url).href,
 };
 
+icons.ai = AI_CHAT_ICON;
+icons.add = AI_CHAT_ICON;
+icons.chat = AI_CHAT_ICON;
+
 const containerId = 'cesiumContainer';
 const {
 	initCesium,
@@ -416,6 +502,7 @@ const {
 	removeScaleUpdateHandler,
 	subscribePerformanceStats,
 	getPerformanceStats,
+	setRenderPreset,
 	addVecLayer,
 	addCvaLayer,
 	addCiaLayer,
@@ -431,7 +518,12 @@ const {
 	enterHomeScene,
 	stopHomeEarthRotation,
 	flyToOnLeaveHome,
-} = useCesium(containerId);
+} = useCesium(containerId, { renderPreset: props.renderPreset });
+
+watch(() => props.renderPreset, (nextPreset) => {
+	if (!nextPreset) return;
+	setRenderPreset(nextPreset);
+}, { deep: true });
 
 // 状态管理
 const topTabs = [
@@ -490,6 +582,107 @@ const scaleBar = reactive({ metersPerPixel: 0, widthPx: 100, label: '100 m', zoo
 const compassRotation = computed(() => headingDeg.value - 90);
 const showPerformanceMonitor = import.meta.env.DEV;
 const performanceMonitor = reactive(getPerformanceStats());
+const PERFORMANCE_HISTORY_LIMIT = 48;
+const PERFORMANCE_HEALTH_WINDOW = 12;
+const performanceFpsHistory = ref([]);
+const performanceMonitorMinimized = ref(true);
+const performanceMonitorPosition = reactive({ left: 18, bottom: 64 });
+const performanceMonitorDrag = reactive({ active: false, pointerId: null, startX: 0, startY: 0, startLeft: 0, startBottom: 0 });
+const performanceMonitorStyle = computed(() => ({
+	left: `${performanceMonitorPosition.left}px`,
+	bottom: `${performanceMonitorPosition.bottom}px`,
+}));
+const performanceFpsStats = computed(() => {
+	const samples = performanceFpsHistory.value.length ? performanceFpsHistory.value : [Number(performanceMonitor.fps) || 0];
+	const values = samples.map((value) => Number(value) || 0);
+	const min = Math.min(...values);
+	const max = Math.max(...values);
+	const average = values.reduce((sum, value) => sum + value, 0) / values.length;
+	const jitter = max - min;
+	const recentValues = values.slice(-PERFORMANCE_HEALTH_WINDOW);
+	const recentMin = Math.min(...recentValues);
+	const recentMax = Math.max(...recentValues);
+	const recentAverage = recentValues.reduce((sum, value) => sum + value, 0) / recentValues.length;
+	const recentJitter = recentMax - recentMin;
+	const last = values[values.length - 1] ?? 0;
+	const previous = values[values.length - 2] ?? last;
+	const delta = last - previous;
+	return { min, max, average, jitter, recentMin, recentMax, recentAverage, recentJitter, last, previous, delta };
+});
+const performanceHealth = computed(() => {
+	const fps = Number(performanceMonitor.fps) || 0;
+	const { recentJitter, recentAverage } = performanceFpsStats.value;
+	if (fps <= 0) {
+		return { level: 'bad', text: '暂无有效帧率' };
+	}
+	if (fps < 20 || recentAverage < 24) {
+		return { level: 'bad', text: '卡顿，不可用状态' };
+	}
+	if (recentJitter > 30) {
+		return { level: 'warning', text: '帧数波动过大' };
+	}
+	return { level: 'good', text: 'FPS 正常' };
+});
+const performanceFpsChartScale = computed(() => {
+	const values = performanceFpsHistory.value;
+	if (!values.length) return { min: 0, max: 60, range: 60 };
+	const numericValues = values.map((value) => Number(value) || 0);
+	const minValue = Math.min(...numericValues);
+	const maxValue = Math.max(...numericValues);
+	const padding = Math.max(4, (maxValue - minValue) * 0.35);
+	const chartMin = Math.max(0, Math.floor(minValue - padding));
+	const chartMax = Math.max(chartMin + 6, Math.ceil(maxValue + padding));
+	return { min: chartMin, max: chartMax, range: chartMax - chartMin };
+});
+const performanceFpsChartPoints = computed(() => {
+	const values = performanceFpsHistory.value;
+	if (!values.length) return '';
+	const width = 240;
+	const height = 72;
+	const numericValues = values.map((value) => Number(value) || 0);
+	const { min: chartMin, max: chartMax, range } = performanceFpsChartScale.value;
+	const step = values.length > 1 ? width / (values.length - 1) : width;
+	return numericValues.map((value, index) => {
+		const x = Number((index * step).toFixed(2));
+		const normalized = (Math.min(chartMax, Math.max(chartMin, value)) - chartMin) / range;
+		const y = Number((height - normalized * height).toFixed(2));
+		return `${x},${y}`;
+	}).join(' ');
+});
+const performanceMonitorSampleTime = computed(() => {
+	if (!performanceMonitor.timestamp) return '--';
+	const date = new Date(performanceMonitor.timestamp);
+	if (Number.isNaN(date.getTime())) return '--';
+	return date.toLocaleTimeString('zh-CN', { hour12: false });
+});
+const performanceIssueReason = computed(() => {
+	const fps = Number(performanceMonitor.fps) || 0;
+	const renderRequestsPerSecond = Number(performanceMonitor.renderRequestsPerSecond) || 0;
+	const primitiveCount = Number(performanceMonitor.primitiveCount) || 0;
+	const dataSourceCount = Number(performanceMonitor.dataSourceCount) || 0;
+	const tilesetCount = Number(performanceMonitor.tilesetCount) || 0;
+	const imageryLayerCount = Number(performanceMonitor.imageryLayerCount) || 0;
+	const { recentJitter, recentAverage, delta } = performanceFpsStats.value;
+
+	if (fps <= 0) {
+		return '等待有效 FPS 样本，地图渲染尚未稳定。';
+	}
+	if (fps < 20 || recentAverage < 24) {
+		if (performanceMonitor.cameraMoving) return '相机移动时持续低帧，可能正在加载瓦片或重绘视域。';
+		if (renderRequestsPerSecond > 30) return '渲染请求过密，可能有高频状态更新触发连续重绘。';
+		if (primitiveCount > 200 || dataSourceCount > 20 || tilesetCount > 8) return '场景对象或数据源偏多，GPU/主线程绘制压力较高。';
+		if (imageryLayerCount > 6 || performanceMonitor.terrainMode === 'network') return '影像/地形图层较重，网络地形或纹理加载可能拖慢帧率。';
+		return '最近采样持续低帧，可能是浏览器主线程或 GPU 压力。';
+	}
+	if (recentJitter > 30) {
+		if (Math.abs(delta) > 20) return '最近一帧跳变明显，可能有突发图层加载或脚本任务抢占。';
+		if (performanceMonitor.cameraMoving) return '相机交互期间 FPS 跨度超过 30，可能是瓦片加载和视域重绘叠加。';
+		if (renderRequestsPerSecond > 20) return '渲染请求频率偏高，连续 requestRender 可能造成帧率抖动。';
+		if (primitiveCount > 200 || dataSourceCount > 20) return '场景对象较多，局部数据刷新时容易出现帧率波动。';
+		return '最近样本 FPS 跨度超过 30，建议检查突发网络加载或长任务。';
+	}
+	return `最近波动 ${recentJitter.toFixed(1)} FPS，未超过 30 阈值。`;
+});
 const layerPanelVisible = ref(false);
 const baseLayerActive = ref('天地图');
 const showInfoPanel = ref(false);
@@ -540,6 +733,18 @@ const shpDataSourceMap = new Map();
 const kmlDataSourceMap = new Map();
 const kmlObjectUrlMap = new Map();
 const cadDataSourceMap = new Map();
+const dataManagementRef = ref(null);
+const inspectionDataSources = {
+	routes: null,
+	issues: null,
+	playback: null,
+};
+const inspectionState = reactive({
+	taskId: '',
+	selectedRouteId: '',
+	playbackRouteId: '',
+	playbackProgress: 0,
+});
 let djcxLoadingTimer = null;
 let djcxLoadingToken = 0;
 let djcxMultiSelectedKeys = [];
@@ -554,6 +759,65 @@ function parseTerrainUrls(input) {
 		.split(/[;；]/)
 		.map(normalizeTerrainUrl)
 		.filter(Boolean);
+}
+
+function pushPerformanceFpsSample(fps) {
+	const value = Number(fps);
+	if (!Number.isFinite(value) || value < 0) return;
+	performanceFpsHistory.value = [...performanceFpsHistory.value, value].slice(-PERFORMANCE_HISTORY_LIMIT);
+}
+
+function clampPerformanceMonitorPosition() {
+	const viewportWidth = window.innerWidth || 1280;
+	const viewportHeight = window.innerHeight || 720;
+	performanceMonitorPosition.left = Math.min(Math.max(performanceMonitorPosition.left, 8), Math.max(8, viewportWidth - 320));
+	performanceMonitorPosition.bottom = Math.min(Math.max(performanceMonitorPosition.bottom, 56), Math.max(56, viewportHeight - 180));
+}
+
+function onPerformanceMonitorPointerDown(event) {
+	if (!showPerformanceMonitor) return;
+	performanceMonitorDrag.active = true;
+	performanceMonitorDrag.pointerId = event.pointerId;
+	performanceMonitorDrag.startX = event.clientX;
+	performanceMonitorDrag.startY = event.clientY;
+	performanceMonitorDrag.startLeft = performanceMonitorPosition.left;
+	performanceMonitorDrag.startBottom = performanceMonitorPosition.bottom;
+	window.addEventListener('pointermove', onPerformanceMonitorPointerMove);
+	window.addEventListener('pointerup', onPerformanceMonitorPointerUp);
+}
+
+function onPerformanceMonitorPointerMove(event) {
+	if (!performanceMonitorDrag.active) return;
+	const dx = event.clientX - performanceMonitorDrag.startX;
+	const dy = event.clientY - performanceMonitorDrag.startY;
+	performanceMonitorPosition.left = performanceMonitorDrag.startLeft + dx;
+	performanceMonitorPosition.bottom = performanceMonitorDrag.startBottom - dy;
+	clampPerformanceMonitorPosition();
+}
+
+function onPerformanceMonitorPointerUp() {
+	performanceMonitorDrag.active = false;
+	performanceMonitorDrag.pointerId = null;
+	window.removeEventListener('pointermove', onPerformanceMonitorPointerMove);
+	window.removeEventListener('pointerup', onPerformanceMonitorPointerUp);
+}
+
+function minimizePerformanceMonitor() {
+	performanceMonitorMinimized.value = true;
+	onPerformanceMonitorPointerUp();
+}
+
+function restorePerformanceMonitor() {
+	performanceMonitorMinimized.value = false;
+	clampPerformanceMonitorPosition();
+}
+
+function togglePerformanceMonitor() {
+	if (performanceMonitorMinimized.value) {
+		restorePerformanceMonitor();
+		return;
+	}
+	minimizePerformanceMonitor();
 }
 
 function parseTerrainNames(input) {
@@ -672,7 +936,7 @@ function djcxParseChineseLevelNumber(value) {
 	return NaN;
 }
 
-function djcxResolveLevelRoman(props, fallbackOrder) {
+function djcxResolveLevelRoman(props) {
 	const rawLevel = djcxGetProp(props, ['土地级别', 'TDJB', 'tdjb', 'LEVEL', 'level', '级别']);
 	if (rawLevel != null && rawLevel !== '') {
 		const text = String(rawLevel).trim();
@@ -689,7 +953,7 @@ function djcxResolveLevelRoman(props, fallbackOrder) {
 			if (roman) return roman;
 		}
 	}
-	return djcxToRoman(fallbackOrder);
+	return '';
 }
 
 function djcxColorForIndex(index, total) {
@@ -697,6 +961,42 @@ function djcxColorForIndex(index, total) {
 	const t = Math.max(1, Number(total || 1));
 	const hue = ((i - 1) * (360 / t)) % 360;
 	return Cesium.Color.fromHsl(hue / 360, 0.85, 0.55, 1);
+}
+
+// 根据土地级别返回对应颜色
+// 一级红色、二级黄色、三级绿色、四级蓝色、五级青色、六级紫色
+function djcxColorForLevel(level) {
+	// 支持传入罗马数字、阿拉伯数字或中文数字
+	let levelNum = null;
+	if (typeof level === 'string') {
+		const upper = level.toUpperCase().trim();
+		// 解析罗马数字
+		const romanToNum = { 'I': 1, 'II': 2, 'III': 3, 'IV': 4, 'V': 5, 'VI': 6 };
+		if (romanToNum[upper]) {
+			levelNum = romanToNum[upper];
+		} else {
+			// 解析阿拉伯数字或中文数字
+			levelNum = djcxParseChineseLevelNumber(level);
+		}
+	} else if (typeof level === 'number') {
+		levelNum = level;
+	}
+	if (!levelNum || levelNum < 1 || levelNum > 6) return null;
+	const levelColors = {
+		1: Cesium.Color.RED,       // 一级：红色
+		2: Cesium.Color.YELLOW,   // 二级：黄色
+		3: Cesium.Color.GREEN,    // 三级：绿色
+		4: Cesium.Color.BLUE,     // 四级：蓝色
+		5: Cesium.Color.CYAN,     // 五级：青色
+		6: Cesium.Color.MAGENTA,  // 六级：紫色
+	};
+	return levelColors[levelNum];
+}
+
+// 根据罗马数字获取级别颜色
+function djcxColorForRoman(roman) {
+	if (!roman) return null;
+	return djcxColorForLevel(roman);
 }
 
 function djcxParseJsonObject(input) {
@@ -935,6 +1235,7 @@ async function djcxAddNodeFeatures(nodeId, records) {
 	if (!featureCollection.features.length) return;
 	const ds = await Cesium.GeoJsonDataSource.load(featureCollection, { clampToGround: true });
 	ds.name = `djcx-node-${String(nodeId)}`;
+	ds.show = activeTopTab.value === 'djcx';
 	await viewer.dataSources.add(ds);
 	const now = Cesium.JulianDate.now();
 	const baseEntities = [...ds.entities.values].filter((ent) => ent && (ent.polygon || ent.polyline));
@@ -968,8 +1269,13 @@ async function djcxAddNodeFeatures(nodeId, records) {
 		const order = Number.isFinite(rawIndex) && rawIndex > 0 ? Math.min(total, Math.max(1, rawIndex)) : 1;
 		ent._djcxOrder = order;
 		ent._djcxRoman = djcxToRoman(order);
-		ent._djcxLevelRoman = djcxResolveLevelRoman(ent._djcxProperties, order);
-		const baseColor = djcxColorForIndex(order, total);
+		ent._djcxLevelRoman = djcxResolveLevelRoman(ent._djcxProperties);
+
+		// 根据土地级别获取颜色：优先使用已解析的罗马数字，其次尝试从属性获取
+		const levelColor = djcxColorForRoman(ent._djcxLevelRoman) ||
+			djcxColorForLevel(djcxGetProp(ent._djcxProperties, ['土地级别', 'TDJB', 'tdjb', '级别', 'LEVEL', 'level']));
+		const baseColor = levelColor || djcxColorForIndex(order, total);
+
 		ent._djcxBaseStyle = {
 			FILL: baseColor.withAlpha(djcxNodeFillAlpha),
 			OUTLINE: djcxOutlineColor,
@@ -1020,21 +1326,20 @@ async function djcxAddNodeFeatures(nodeId, records) {
 			const polyCoords = polygons[i];
 			const areaDeg2 = Math.abs(djcxRingSignedArea(polyCoords?.[0] || []));
 			if (!Number.isFinite(areaDeg2) || areaDeg2 < djcxLabelMinAreaDeg2) continue;
+			if (!ent._djcxLevelRoman) continue;
 			const labelPos = djcxPickLabelLonLatForPolygon(polyCoords, avoidGeoms) || djcxPickLabelLonLat(ent, baseEntities);
 			if (!labelPos) continue;
-			const baseColor = djcxColorForIndex(ent._djcxOrder, total);
 			const labelEntity = ds.entities.add({
 				position: Cesium.Cartesian3.fromDegrees(labelPos.longitude, labelPos.latitude, 0),
 				label: {
-					text: ent._djcxLevelRoman || ent._djcxRoman || '',
+					text: ent._djcxLevelRoman,
 					font: 'bold 18px Microsoft YaHei',
-					fillColor: baseColor,
+					fillColor: Cesium.Color.WHITE,
 					outlineColor: Cesium.Color.BLACK,
-					outlineWidth: 3,
+					outlineWidth: 2,
 					style: Cesium.LabelStyle.FILL_AND_OUTLINE,
 					disableDepthTestDistance: Number.POSITIVE_INFINITY,
-					showBackground: true,
-					backgroundColor: new Cesium.Color(0.05, 0.06, 0.08, 0.55),
+					showBackground: false,
 					pixelOffset: new Cesium.Cartesian2(0, -10),
 					heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
 				}
@@ -1112,6 +1417,12 @@ function djcxGetAllFeatureEntities() {
 		}
 	}
 	return out;
+}
+
+function setDjcxDataSourcesVisible(visible) {
+	for (const ds of djcxNodeDataSources.values()) {
+		if (ds) ds.show = visible;
+	}
 }
 
 function djcxFeatureKey(entity) {
@@ -1487,14 +1798,19 @@ const enterModule = (tabKey) => {
 
 watch(activeTopTab, async (newVal) => {
 	const viewer = getViewer();
+	if (newVal === 'home') {
+		layerPanelVisible.value = false;
+	}
 	if (newVal !== 'home') {
 		stopHomeEarthRotation();
 	}
 	if (newVal === 'djcx') {
 		djcxGongneng.value = true;
+		setDjcxDataSourcesVisible(true);
 	} else {
 		// listItem.value = -1;
 		djcxGongneng.value = false;
+		setDjcxDataSourcesVisible(false);
 	}
 
 	// 切换页面时，如果不是首页，则关闭测量工具并隐藏已有的测量实体
@@ -3156,23 +3472,23 @@ function startTool(type) {
 		if (['drawPolygon', 'measureArea', 'measureVolume', 'dianPolygon'].includes(type) && positions.length >= 3) {
 			finalizeDrawing();
 		}
-	}, Cesium.ScreenSpaceEventType.RIGHT_CLICK);
+	}, Cesium.ScreenSpaceEventType.LEFT_DOUBLE_CLICK);
 }
 
 function updateDrawingHint(type, pointCount) {
 	const hints = {
 		dianxuan: ['点击地图查询要素', '点击地图查询要素'],
 		duodian: ['点击地图选择多个要素', '继续点击选择/取消选择'],
-		dianPolygon: ['点击地图开始框选查询', '点击增加点，右键结束查询'],
+		dianPolygon: ['点击地图开始框选查询', '点击增加点，双击结束查询'],
 		dianCircle: ['点击选择圆心', '移动鼠标调整半径，再次点击查询'],
 		dianRect: ['点击选择起点', '移动鼠标调整范围，再次点击查询'],
-		drawLine: ['点击地图开始画线', '点击增加点，右键结束'],
-		drawPolygon: ['点击地图开始画多边形', '点击增加点，右键结束'],
+		drawLine: ['点击地图开始画线', '点击增加点，双击结束'],
+		drawPolygon: ['点击地图开始画多边形', '点击增加点，双击结束'],
 		drawCircle: ['点击选择圆心', '移动鼠标调整半径，再次点击完成'],
 		drawRect: ['点击选择起点', '移动鼠标调整范围，再次点击完成'],
-		measureDistance: ['点击地图开始测距', '点击增加点，右键结束'],
-		measureArea: ['点击地图开始测面积', '点击增加点，右键结束'],
-		measureVolume: ['点击地图选择范围', '点击增加点，右键结束'],
+		measureDistance: ['点击地图开始测距', '点击增加点，双击结束'],
+		measureArea: ['点击地图开始测面积', '点击增加点，双击结束'],
+		measureVolume: ['点击地图选择范围', '点击增加点，双击结束'],
 		measureAzimuth: ['点击起点', '点击终点查看方位角'],
 		measureAngle: ['点击第一个点', '点击顶点', '点击第三个点完成']
 	};
@@ -4757,7 +5073,7 @@ onMounted(async () => {
 	// 加载地价查询图层
 	// list.value = await getLandPriceLayers();
 
-	initCesium();
+	initCesium(props.renderPreset);
 	homeUiVisible.value = true;
 	homeSidebarEntering.value = false;
 	await enterHomeScene({ duration: 0 });
@@ -4783,6 +5099,7 @@ onMounted(async () => {
 	if (showPerformanceMonitor) {
 		unsubscribePerformanceStats = subscribePerformanceStats((stats) => {
 			Object.assign(performanceMonitor, stats);
+			pushPerformanceFpsSample(stats?.fps);
 		});
 	}
 	document.addEventListener('click', e => {
@@ -4790,6 +5107,7 @@ onMounted(async () => {
 	});
 	updateIndicator();
 	window.addEventListener('resize', updateIndicator);
+	window.addEventListener('resize', clampPerformanceMonitorPosition);
 	setShpFeaturePanelDefaultPosition();
 	window.addEventListener('resize', onShpFeaturePopupResize, { passive: true });
 });
@@ -4801,12 +5119,15 @@ onBeforeUnmount(() => {
 		unsubscribePerformanceStats();
 		unsubscribePerformanceStats = null;
 	}
+	onPerformanceMonitorPointerUp();
 	removeClickHandler(); removeMouseMoveHandler(); removeHeadingUpdateHandler(); removeScaleUpdateHandler();
+	window.removeEventListener('resize', clampPerformanceMonitorPosition);
 	window.removeEventListener('resize', onShpFeaturePopupResize);
 	window.removeEventListener('pointermove', onShpFeatureHeaderPointerMove);
 	window.removeEventListener('pointerup', onShpFeatureHeaderPointerUp);
 	window.removeEventListener('pointermove', onShpFeatureFloatPointerMove);
 	window.removeEventListener('pointerup', onShpFeatureFloatPointerUp);
+	clearAllInspectionOverlays();
 	destroyCesium();
 });
 
@@ -5194,6 +5515,339 @@ function zoomToTargetPreservePitch(target) {
 	});
 }
 
+function ensureInspectionDataSource(key, name) {
+	const viewer = getViewer();
+	if (!viewer) return null;
+	if (inspectionDataSources[key]) return inspectionDataSources[key];
+	const dataSource = new Cesium.CustomDataSource(name);
+	inspectionDataSources[key] = dataSource;
+	viewer.dataSources.add(dataSource);
+	return dataSource;
+}
+
+function requestInspectionRender() {
+	const viewer = getViewer();
+	if (viewer) viewer.scene.requestRender();
+}
+
+function toInspectionPositions(points = []) {
+	return points
+		.filter((point) => Number.isFinite(Number(point?.lng)) && Number.isFinite(Number(point?.lat)))
+		.map((point) => Cesium.Cartesian3.fromDegrees(Number(point.lng), Number(point.lat), Number(point.height) || 0));
+}
+
+function getInspectionRouteColor(status, highlighted = false) {
+	if (highlighted) {
+		return Cesium.Color.fromCssColorString('#45efff');
+	}
+	switch (status) {
+		case 'COMPLETED':
+			return Cesium.Color.fromCssColorString('#2ec27e');
+		case 'AWAITING_REVIEW':
+			return Cesium.Color.fromCssColorString('#f59e0b');
+		case 'REJECTED':
+			return Cesium.Color.fromCssColorString('#ef4444');
+		case 'IN_PROGRESS':
+			return Cesium.Color.fromCssColorString('#3b82f6');
+		case 'OVERDUE':
+			return Cesium.Color.fromCssColorString('#f97316');
+		default:
+			return Cesium.Color.fromCssColorString('#94a3b8');
+	}
+}
+
+function createInspectionRouteEntity(route, options = {}) {
+	const positions = toInspectionPositions(route?.coordinates || []);
+	if (!positions.length) return null;
+	const highlighted = Boolean(options.highlighted);
+	const color = getInspectionRouteColor(route?.status, highlighted);
+	return {
+		id: `inspection-route:${route.id}`,
+		position: positions[Math.floor(positions.length / 2)],
+		polyline: {
+			positions,
+			width: highlighted ? 6 : 4,
+			material: color,
+			depthFailMaterial: color.withAlpha(0.45),
+			clampToGround: false,
+		},
+		label: {
+			text: `${route.routeName || '巡检路线'}${options.withStatus ? ` · ${route.status || ''}` : ''}`,
+			font: '13px Microsoft YaHei',
+			fillColor: Cesium.Color.WHITE,
+			outlineColor: Cesium.Color.BLACK,
+			outlineWidth: 2,
+			style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+			showBackground: true,
+			backgroundColor: new Cesium.Color(0.08, 0.12, 0.18, 0.72),
+			pixelOffset: new Cesium.Cartesian2(0, -20),
+			verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+			disableDepthTestDistance: Number.POSITIVE_INFINITY,
+		},
+		_inspectionRouteId: route.id,
+		_inspectionRouteStatus: route.status,
+	};
+}
+
+function clearInspectionRoutes() {
+	const dataSource = inspectionDataSources.routes;
+	if (dataSource) dataSource.entities.removeAll();
+	inspectionState.selectedRouteId = '';
+	requestInspectionRender();
+}
+
+function clearInspectionIssues() {
+	const dataSource = inspectionDataSources.issues;
+	if (dataSource) dataSource.entities.removeAll();
+	requestInspectionRender();
+}
+
+function clearInspectionPlayback() {
+	const dataSource = inspectionDataSources.playback;
+	if (dataSource) dataSource.entities.removeAll();
+	inspectionState.playbackRouteId = '';
+	inspectionState.playbackProgress = 0;
+	requestInspectionRender();
+}
+
+function clearAllInspectionOverlays() {
+	clearInspectionRoutes();
+	clearInspectionIssues();
+	clearInspectionPlayback();
+	inspectionState.taskId = '';
+}
+
+function renderInspectionTaskRoutes(task, options = {}) {
+	const routes = Array.isArray(task?.routes) ? task.routes : [];
+	const dataSource = ensureInspectionDataSource('routes', 'inspection-task-routes');
+	if (!dataSource) return null;
+	dataSource.entities.removeAll();
+	routes.forEach((route) => {
+		const entityConfig = createInspectionRouteEntity(route, {
+			highlighted: route.id === options.highlightRouteId,
+			withStatus: true,
+		});
+		if (entityConfig) {
+			dataSource.entities.add(entityConfig);
+		}
+	});
+	inspectionState.taskId = task?.id || '';
+	inspectionState.selectedRouteId = options.highlightRouteId || '';
+	requestInspectionRender();
+	return dataSource;
+}
+
+function highlightInspectionRoute(routeId) {
+	const dataSource = inspectionDataSources.routes;
+	if (!dataSource) return;
+	dataSource.entities.values.forEach((entity) => {
+		const highlighted = entity._inspectionRouteId === routeId;
+		const color = getInspectionRouteColor(entity._inspectionRouteStatus, highlighted);
+		if (entity.polyline) {
+			entity.polyline.material = color;
+			entity.polyline.depthFailMaterial = color.withAlpha(0.45);
+			entity.polyline.width = highlighted ? 6 : 4;
+		}
+		if (entity.label) {
+			entity.label.backgroundColor = highlighted
+				? new Cesium.Color(0.07, 0.33, 0.41, 0.82)
+				: new Cesium.Color(0.08, 0.12, 0.18, 0.72);
+		}
+	});
+	inspectionState.selectedRouteId = routeId || '';
+	requestInspectionRender();
+}
+
+function focusInspectionTarget(target) {
+	const viewer = getViewer();
+	if (!viewer || !target) return;
+	zoomToTargetPreservePitch(target);
+}
+
+function renderInspectionIssues(payload = {}) {
+	const dataSource = ensureInspectionDataSource('issues', 'inspection-task-issues');
+	if (!dataSource) return null;
+	const issues = Array.isArray(payload.issues) ? payload.issues : [];
+	dataSource.entities.removeAll();
+	issues.forEach((issue, index) => {
+		if (!Number.isFinite(Number(issue?.lng)) || !Number.isFinite(Number(issue?.lat))) return;
+		dataSource.entities.add({
+			id: `inspection-issue:${issue.id || index}`,
+			position: Cesium.Cartesian3.fromDegrees(Number(issue.lng), Number(issue.lat), 0),
+			point: {
+				pixelSize: 12,
+				color: Cesium.Color.fromCssColorString('#ef4444'),
+				outlineColor: Cesium.Color.WHITE,
+				outlineWidth: 2,
+				disableDepthTestDistance: Number.POSITIVE_INFINITY,
+			},
+			label: {
+				text: issue.title || `问题${index + 1}`,
+				font: '12px Microsoft YaHei',
+				fillColor: Cesium.Color.WHITE,
+				outlineColor: Cesium.Color.BLACK,
+				outlineWidth: 2,
+				style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+				showBackground: true,
+				backgroundColor: new Cesium.Color(0.35, 0.08, 0.08, 0.8),
+				pixelOffset: new Cesium.Cartesian2(0, -18),
+				verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+				disableDepthTestDistance: Number.POSITIVE_INFINITY,
+			},
+		});
+	});
+	requestInspectionRender();
+	return dataSource;
+}
+
+function renderInspectionPlayback(payload = {}) {
+	const dataSource = ensureInspectionDataSource('playback', 'inspection-task-playback');
+	if (!dataSource) return null;
+	const route = payload.route || {};
+	const track = payload.track || {};
+	const routePositions = toInspectionPositions(track.coordinates || route.coordinates || []);
+	const trackPositions = toInspectionPositions(track.points || []);
+	const progress = Math.max(0, Math.min(Number(payload.progress) || 0, Math.max(0, trackPositions.length - 1)));
+	dataSource.entities.removeAll();
+
+	if (routePositions.length) {
+		dataSource.entities.add({
+			id: `inspection-playback-route:${route.id || route.routeId || 'base'}`,
+			polyline: {
+				positions: routePositions,
+				width: 3,
+				material: Cesium.Color.fromCssColorString('#1e293b').withAlpha(0.9),
+				depthFailMaterial: Cesium.Color.fromCssColorString('#1e293b').withAlpha(0.45),
+			},
+		});
+	}
+
+	if (trackPositions.length) {
+		dataSource.entities.add({
+			id: `inspection-playback-track:${route.id || route.routeId || 'track'}`,
+			polyline: {
+				positions: trackPositions,
+				width: 4,
+				material: Cesium.Color.fromCssColorString('#38bdf8').withAlpha(0.4),
+				depthFailMaterial: Cesium.Color.fromCssColorString('#38bdf8').withAlpha(0.25),
+			},
+		});
+		dataSource.entities.add({
+			id: `inspection-playback-progress:${route.id || route.routeId || 'progress'}`,
+			polyline: {
+				positions: trackPositions.slice(0, progress + 1),
+				width: 6,
+				material: Cesium.Color.fromCssColorString('#22c55e'),
+				depthFailMaterial: Cesium.Color.fromCssColorString('#22c55e').withAlpha(0.45),
+			},
+		});
+		dataSource.entities.add({
+			id: `inspection-playback-marker:${route.id || route.routeId || 'marker'}`,
+			position: trackPositions[progress],
+			point: {
+				pixelSize: 14,
+				color: Cesium.Color.fromCssColorString('#22c55e'),
+				outlineColor: Cesium.Color.WHITE,
+				outlineWidth: 3,
+				disableDepthTestDistance: Number.POSITIVE_INFINITY,
+			},
+			label: {
+				text: route.routeName || '巡检轨迹',
+				font: '12px Microsoft YaHei',
+				fillColor: Cesium.Color.WHITE,
+				outlineColor: Cesium.Color.BLACK,
+				outlineWidth: 2,
+				style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+				showBackground: true,
+				backgroundColor: new Cesium.Color(0.07, 0.33, 0.16, 0.8),
+				pixelOffset: new Cesium.Cartesian2(0, -20),
+				verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+				disableDepthTestDistance: Number.POSITIVE_INFINITY,
+			},
+		});
+	}
+
+	inspectionState.playbackRouteId = route.id || '';
+	inspectionState.playbackProgress = progress;
+	requestInspectionRender();
+	return dataSource;
+}
+
+function resolveInspectionLocateTarget(payload = {}) {
+	if (payload.fitTask) {
+		return inspectionDataSources.routes;
+	}
+	if (payload.track?.points?.length) {
+		return inspectionDataSources.playback;
+	}
+	const routeId = payload.route?.id;
+	if (!routeId) return inspectionDataSources.routes;
+	const entity = inspectionDataSources.routes?.entities.values.find((item) => item._inspectionRouteId === routeId);
+	return entity || inspectionDataSources.routes;
+}
+
+function handleInspectionTaskSelected(task) {
+	if (!task) return;
+	activeTopTab.value = 'sjgl';
+	clearInspectionIssues();
+	clearInspectionPlayback();
+	const dataSource = renderInspectionTaskRoutes(task);
+	if (dataSource?.entities.values.length) {
+		focusInspectionTarget(dataSource);
+	}
+}
+
+function handleInspectionTaskCleared() {
+	clearAllInspectionOverlays();
+}
+
+function handleInspectionRouteLocate(payload = {}) {
+	const task = payload.task;
+	if (task) {
+		renderInspectionTaskRoutes(task, { highlightRouteId: payload.route?.id });
+	} else if (payload.route?.id) {
+		highlightInspectionRoute(payload.route.id);
+	}
+	if (payload.route?.id) {
+		highlightInspectionRoute(payload.route.id);
+	}
+	if (payload.track) {
+		renderInspectionPlayback(payload);
+	}
+	const target = resolveInspectionLocateTarget(payload);
+	if (target) {
+		focusInspectionTarget(target);
+	}
+}
+
+function handleInspectionRouteIssues(payload = {}) {
+	if (payload.route?.id) {
+		highlightInspectionRoute(payload.route.id);
+	}
+	const dataSource = renderInspectionIssues(payload);
+	if (dataSource?.entities.values.length) {
+		focusInspectionTarget(dataSource);
+	}
+}
+
+function handleInspectionTrackShow(payload = {}) {
+	if (payload.route?.id) {
+		highlightInspectionRoute(payload.route.id);
+	}
+	const dataSource = renderInspectionPlayback(payload);
+	if (dataSource?.entities.values.length) {
+		focusInspectionTarget(dataSource);
+	}
+}
+
+function handleInspectionTrackProgress(payload = {}) {
+	renderInspectionPlayback(payload);
+}
+
+function handleInspectionTrackHide() {
+	clearInspectionPlayback();
+}
+
 function selectSyInfoItem(item, options = {}) {
 	if (!item) return;
 	const viewer = getViewer();
@@ -5506,13 +6160,23 @@ async function clearAllMeasures() {
 	position: absolute;
 	top: 0; left: 0; right: 0; bottom: 0;
 	overflow: hidden;
+	--map-topbar-height: 50px;
+	--map-module-toolbar-height: 60px;
+	--map-overlay-gap: 10px;
+	--map-overlay-top: calc(var(--map-topbar-height) + var(--map-module-toolbar-height) + var(--map-overlay-gap));
+	--map-bottom-status-height: 20px;
+	--map-bottom-control-offset: 30px;
+	--map-bottom-safe-space: 86px;
+	--map-side-panel-width: min(420px, calc(100vw - 20px));
+	--map-left-panel-width: min(380px, calc(100vw - 86px));
 }
 
 .bt {
 	background-color: rgb(21, 21, 21);
 	width: 100%; height: 50px;
 	position: absolute; top: 0; left: 0;
-	color: #fff; z-index: 1;
+	color: #fff; z-index: 20;
+	box-sizing: border-box;
 }
 
 .bt .icon {
@@ -5524,6 +6188,10 @@ async function clearAllMeasures() {
 .bt1 {
 	font-size: 18px; line-height: 50px; margin-left: 50px;
 	font-weight: 600; font-style: italic;
+	max-width: min(24vw, 300px);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
 }
 .banben{
 	position: absolute;
@@ -5928,11 +6596,19 @@ async function clearAllMeasures() {
 	position: absolute; left: 50%; top: 8px; transform: translateX(-50%);
 	display: flex; background: rgba(0, 0, 0, 0.7);
 	border-radius: 4px; padding: 4px; z-index: 1;
+	max-width: min(58vw, 620px);
+	overflow-x: auto;
+	overflow-y: hidden;
+	scrollbar-width: none;
+	box-sizing: border-box;
+	white-space: nowrap;
 }
 
 .top-tab {
-	padding: 4px 16px; width: 60px; text-align: center;
+	padding: 4px 12px; width: clamp(56px, 8vw, 76px); text-align: center;
 	color: #cfd3d7; cursor: pointer; font-size: 13px; z-index: 1;
+	flex: 0 0 auto;
+	box-sizing: border-box;
 }
 
 .top-tab.active { color: #fff; }
@@ -5944,34 +6620,88 @@ async function clearAllMeasures() {
 }
 
 .dibu {
-	position: absolute; bottom: 0; left: 0; width: 100%; height: 20px;
+	position: absolute; bottom: 0; left: 0; width: 100%; height: 28px;
 	background: rgba(25, 35, 32); color: #fff; z-index: 1;
-	line-height: 20px; font-size: 10px;
+	display: flex;
+	align-items: center;
+	gap: 16px;
+	padding: 0 12px;
+	font-size: 10px;
+	box-sizing: border-box;
+	overflow: hidden;
+}
+
+.dibu__coord {
+	font-size: 12px;
+	line-height: 1;
+	white-space: nowrap;
 }
 
 .bilichi {
-	width: 320px; height: 35px; position: absolute; bottom: 30px; left: 10px;
+	width: min(320px, calc(100vw - 190px)); height: 35px; position: absolute; bottom: 38px; left: 10px;
 	background: rgba(25, 35, 32, 0.6); border-radius: 5px; z-index: 1;
+	min-width: 240px;
 }
 
 .dibu_tool {
-	width: 150px; height: 35px; position: absolute; bottom: 30px; right: 10px;
+	width: 150px; height: 35px; position: absolute; bottom: 38px; right: 10px;
 	display: flex; justify-content: center; align-items: center; gap: 10px; z-index: 1;
 }
 
 .performance-monitor {
 	position: absolute;
-	right: 12px;
+	right: auto;
 	bottom: 78px;
-	width: 220px;
-	padding: 10px 12px;
+	width: min(300px, calc(100vw - 24px));
+	max-height: calc(100vh - 150px);
+	padding: 12px;
 	border-radius: 10px;
 	background: rgba(13, 18, 24, 0.88);
 	border: 1px solid rgba(69, 239, 255, 0.25);
 	box-shadow: 0 12px 30px rgba(0, 0, 0, 0.25);
 	backdrop-filter: blur(10px);
 	color: #f8fafc;
-	z-index: 12;
+	z-index: 30;
+	overflow: auto;
+	box-sizing: border-box;
+	touch-action: none;
+}
+
+.performance-monitor--good {
+	border-color: rgba(47, 233, 137, 0.36);
+}
+
+.performance-monitor--warning {
+	border-color: rgba(245, 196, 67, 0.46);
+}
+
+.performance-monitor--bad {
+	border-color: rgba(248, 81, 73, 0.5);
+}
+
+.performance-monitor__head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	cursor: move;
+	user-select: none;
+}
+
+.performance-monitor__title-wrap {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	min-width: 0;
+}
+
+.performance-monitor__status-dot,
+.performance-monitor-pill__dot {
+	width: 10px;
+	height: 10px;
+	border-radius: 50%;
+	background: #2fe989;
+	box-shadow: 0 0 0 4px rgba(47, 233, 137, 0.16);
 }
 
 .performance-monitor__title {
@@ -5979,6 +6709,111 @@ async function clearAllMeasures() {
 	font-weight: 700;
 	letter-spacing: 0;
 	color: #45efff;
+}
+
+.performance-monitor__subtitle {
+	margin-top: 2px;
+	font-size: 11px;
+	line-height: 1.2;
+	color: rgba(226, 232, 240, 0.72);
+}
+
+.performance-monitor__min-btn {
+	width: 26px;
+	height: 26px;
+	border: 1px solid rgba(226, 232, 240, 0.16);
+	border-radius: 6px;
+	background: rgba(148, 163, 184, 0.1);
+	color: #f8fafc;
+	font-size: 18px;
+	line-height: 1;
+	cursor: pointer;
+}
+
+.performance-monitor__min-btn:hover {
+	background: rgba(148, 163, 184, 0.2);
+}
+
+.performance-monitor--warning .performance-monitor__status-dot,
+.performance-monitor-pill--warning .performance-monitor-pill__dot {
+	background: #f5c443;
+	box-shadow: 0 0 0 4px rgba(245, 196, 67, 0.18);
+}
+
+.performance-monitor--bad .performance-monitor__status-dot,
+.performance-monitor-pill--bad .performance-monitor-pill__dot {
+	background: #f85149;
+	box-shadow: 0 0 0 4px rgba(248, 81, 73, 0.18);
+}
+
+.performance-monitor__chart {
+	margin-top: 10px;
+	padding: 8px;
+	border-radius: 8px;
+	background: rgba(15, 23, 42, 0.52);
+	border: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.performance-monitor__chart svg {
+	display: block;
+	width: 100%;
+	height: 72px;
+}
+
+.performance-monitor__chart-guide {
+	stroke: rgba(148, 163, 184, 0.16);
+	stroke-width: 1;
+}
+
+.performance-monitor__chart-line {
+	fill: none;
+	stroke: #45efff;
+	stroke-width: 2.5;
+	stroke-linejoin: round;
+	stroke-linecap: round;
+	filter: drop-shadow(0 0 4px rgba(69, 239, 255, 0.34));
+}
+
+.performance-monitor--warning .performance-monitor__chart-line {
+	stroke: #f5c443;
+}
+
+.performance-monitor--bad .performance-monitor__chart-line {
+	stroke: #f85149;
+}
+
+.performance-monitor__chart-meta {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	margin-top: 6px;
+	font-size: 10px;
+	color: rgba(226, 232, 240, 0.68);
+	white-space: nowrap;
+}
+
+.performance-monitor__reason {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	margin-top: 10px;
+	padding: 8px;
+	border-radius: 8px;
+	background: rgba(148, 163, 184, 0.08);
+	border: 1px solid rgba(148, 163, 184, 0.12);
+	font-size: 11px;
+	line-height: 1.45;
+}
+
+.performance-monitor__reason span {
+	flex-shrink: 0;
+	color: rgba(226, 232, 240, 0.68);
+}
+
+.performance-monitor__reason strong {
+	font-weight: 600;
+	color: #f8fafc;
 }
 
 .performance-monitor__grid {
@@ -6012,6 +6847,64 @@ async function clearAllMeasures() {
 	text-overflow: ellipsis;
 }
 
+.performance-monitor-pill {
+	position: relative;
+	z-index: 31;
+	display: inline-flex;
+	align-items: center;
+	gap: 10px;
+	height: 28px;
+	padding: 0 12px;
+	flex-shrink: 0;
+	border: 1px solid rgba(255, 255, 255, 0.18);
+	border-radius: 999px;
+	background: rgba(0, 0, 0, 0.58);
+	color: #fff;
+	font-size: 12px;
+	font-weight: 700;
+	cursor: pointer;
+	backdrop-filter: blur(12px);
+	box-shadow: 0 8px 22px rgba(0, 0, 0, 0.24);
+}
+
+.performance-monitor-pill--good {
+	border-color: rgba(47, 233, 137, 0.28);
+}
+
+.performance-monitor-pill--warning {
+	border-color: rgba(245, 196, 67, 0.32);
+}
+
+.performance-monitor-pill--bad {
+	border-color: rgba(248, 81, 73, 0.34);
+}
+
+.performance-monitor-pill--home {
+	margin-right: 16px;
+}
+
+.performance-monitor-pill--status {
+	height: 22px;
+	gap: 7px;
+	padding: 0 10px;
+	font-size: 11px;
+	box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2);
+}
+
+.performance-monitor-pill--status .performance-monitor-pill__dot {
+	width: 8px;
+	height: 8px;
+	box-shadow: 0 0 0 3px rgba(47, 233, 137, 0.13);
+}
+
+.performance-monitor-pill--status.performance-monitor-pill--warning .performance-monitor-pill__dot {
+	box-shadow: 0 0 0 3px rgba(245, 196, 67, 0.15);
+}
+
+.performance-monitor-pill--status.performance-monitor-pill--bad .performance-monitor-pill__dot {
+	box-shadow: 0 0 0 3px rgba(248, 81, 73, 0.15);
+}
+
 .dibu_tool_btn {
 	width: 30px; height: 30px; border-radius: 50%; cursor: pointer;
 	background: rgba(0, 0, 0, 0.4) center/70% no-repeat;
@@ -6023,8 +6916,10 @@ async function clearAllMeasures() {
 
 .layer-panel {
 	position: absolute; bottom: 70px; right: 10px; width: min(452px, calc(100vw - 20px));
+	max-height: calc(100vh - 140px);
 	background: rgba(25, 35, 32, 0.9); border: 1px solid #3a4a46;
 	border-radius: 6px; z-index: 10;
+	overflow: auto;
 }
 
 .layer-grid {
@@ -6054,6 +6949,190 @@ async function clearAllMeasures() {
 .layer-card.active { border-color: #45efff; }
 .layer-card.active .label { background: #1f8cf0; }
 
+@media (max-width: 1100px) {
+	.cesium-box {
+		--map-topbar-height: 84px;
+		--map-overlay-top: calc(var(--map-topbar-height) + var(--map-module-toolbar-height) + var(--map-overlay-gap));
+	}
+
+	.bt {
+		height: var(--map-topbar-height);
+	}
+
+	.bt1 {
+		line-height: 42px;
+		max-width: calc(100vw - 240px);
+	}
+
+	.banben {
+		top: 28px;
+		left: 50px;
+	}
+
+	.top-tabs {
+		left: 12px;
+		right: 12px;
+		top: 46px;
+		transform: none;
+		max-width: none;
+		justify-content: flex-start;
+	}
+
+	.btn-wrapper {
+		right: 148px;
+		top: 20px;
+		transform: none;
+	}
+
+	.bt-ai-btn {
+		top: 0;
+	}
+}
+
+@media (max-width: 720px) {
+	.cesium-box {
+		--map-topbar-height: 92px;
+		--map-bottom-safe-space: 126px;
+		--map-left-panel-width: calc(100vw - 76px);
+		--map-side-panel-width: calc(100vw - 20px);
+	}
+
+	.bt {
+		height: var(--map-topbar-height);
+	}
+
+	.bt .icon {
+		left: 12px;
+	}
+
+	.bt1 {
+		margin-left: 42px;
+		font-size: 15px;
+		max-width: calc(100vw - 178px);
+	}
+
+	.banben {
+		display: none;
+	}
+
+	.bt-right {
+		right: 54px;
+		max-width: 76px;
+	}
+
+	.acction {
+		max-width: 76px;
+		font-size: 12px;
+	}
+
+	.dianyuan {
+		right: 12px;
+	}
+
+	.btn-wrapper {
+		right: 136px;
+	}
+
+	.bt-ai-btn {
+		width: 34px;
+		height: 34px;
+		padding: 0;
+		border-radius: 50%;
+	}
+
+	.bt-ai-btn .txt-wrapper {
+		display: none;
+	}
+
+	.bt-ai-btn .btn-svg {
+		margin-right: 0;
+	}
+
+	.top-tabs {
+		top: 52px;
+		padding: 4px;
+	}
+
+	.top-tab {
+		width: auto;
+		min-width: 58px;
+		padding: 4px 10px;
+		font-size: 12px;
+	}
+
+	.dibu {
+		height: 42px;
+		gap: 8px 12px;
+		padding: 4px 8px;
+		box-sizing: border-box;
+		flex-wrap: wrap;
+		align-content: center;
+	}
+
+	.dibu__coord {
+		font-size: 11px;
+	}
+
+	.bilichi {
+		left: 10px;
+		right: 10px;
+		bottom: 90px;
+		width: auto;
+		min-width: 0;
+	}
+
+	.dibu_tool {
+		right: 10px;
+		bottom: 50px;
+	}
+
+	.performance-monitor {
+		left: 10px;
+		right: 10px;
+		bottom: 126px;
+		width: auto;
+		max-height: min(260px, calc(100vh - 220px));
+	}
+
+	.performance-monitor-pill {
+		max-width: calc(100vw - 180px);
+	}
+
+	.performance-monitor-pill--status {
+		max-width: calc(100vw - 24px);
+	}
+
+	.layer-panel {
+		left: 10px;
+		right: 10px;
+		bottom: 86px;
+		width: auto;
+	}
+
+	.layer-grid {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 8px;
+	}
+
+	.layer-card {
+		height: 82px;
+	}
+
+	.layer-card .thumb {
+		height: 56px;
+	}
+}
+
+@media (max-height: 720px) and (min-width: 721px) {
+	.performance-monitor {
+		max-height: 210px;
+	}
+
+	.performance-monitor__grid {
+		grid-template-columns: repeat(4, minmax(0, 1fr));
+	}
+}
+
 .module-appear {
 	animation: module-appear 360ms ease both;
 }
@@ -6077,6 +7156,8 @@ async function clearAllMeasures() {
 .shp-feature-panel {
 	position: fixed;
 	z-index: 9998;
+	max-width: calc(100vw - 20px);
+	max-height: calc(100vh - 90px);
 	background: rgba(255, 255, 255, 0.98);
 	border: 1px solid #e2e8f0;
 	border-radius: 12px;
