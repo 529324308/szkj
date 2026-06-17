@@ -426,6 +426,13 @@ export function clearDeviceProfileCache() {
 	}
 }
 
+export function resolveRecommendedMapEngine(profile) {
+	const tier = profile?.benchmark?.tierKey;
+	const webglSupported = profile?.webgl?.supported !== false;
+	if (!webglSupported) return 'openlayers';
+	return ['balanced', 'high', 'flagship'].includes(tier) ? 'cesium' : 'openlayers';
+}
+
 export async function collectDeviceProfile(options = {}) {
 	const onProgress = typeof options.onProgress === 'function' ? options.onProgress : () => {};
 	onProgress({ progress: 8, stage: '正在检测浏览器能力' });
@@ -442,7 +449,7 @@ export async function collectDeviceProfile(options = {}) {
 		const cached = readCachedProfile();
 		if (cached?.profile && cached?.preset && cached.signature === currentSignature) {
 			releaseWebglContext(gl);
-			onProgress({ progress: 90, stage: '已读取设备档案，正在进入三维场景' });
+			onProgress({ progress: 90, stage: '已读取设备档案，正在生成地图版本推荐' });
 			await wait(120);
 			return {
 				...cached,
@@ -488,9 +495,9 @@ export async function collectDeviceProfile(options = {}) {
 	};
 	const preset = buildRenderPreset(profile);
 
-	onProgress({ progress: 84, stage: '正在预热 Cesium 资源' });
+	onProgress({ progress: 84, stage: '正在生成地图版本推荐' });
 	await wait(260);
-	onProgress({ progress: 90, stage: '正在进入三维场景' });
+	onProgress({ progress: 90, stage: '请选择进入的地图版本' });
 
 	if (webgl.supported) {
 		writeCachedProfile(profile, preset);

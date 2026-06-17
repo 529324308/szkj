@@ -1,4 +1,5 @@
 import { request } from './request';
+import { clearLogoutState } from '../utils/appStorage';
 
 /**
  * 认证相关接口
@@ -19,11 +20,8 @@ export function login(userName, password) {
 /**
  * 登出逻辑 (通常只是前端清理)
  */
-export function logout() {
-  localStorage.removeItem('accessToken');
-  localStorage.removeItem('refreshToken');
-  localStorage.removeItem('expiresIn');
-  localStorage.removeItem('userName');
+export function logout(options = {}) {
+  return clearLogoutState(options);
 }
 
 /**

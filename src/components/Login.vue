@@ -8,6 +8,11 @@
 -->
 <template>
   <div class="login-wrap">
+    <FallingPattern
+      class="login-pattern-bg"
+      color="#ffffff"
+      background-color="#1A1B1D"
+    />
     <div class="bg-page-logo">
       <img src="../assets/logo.png" alt="logo" />
     </div>
@@ -65,6 +70,7 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { login } from '../api/auth';
+import FallingPattern from './ui/falling-pattern.vue';
 
 const emit = defineEmits(['success']);
 const MESSAGE_OFFSET_TOP = 200;
@@ -126,6 +132,7 @@ async function onSubmit() {
 
 <style scoped lang="scss">
 .login-wrap {
+  --background: #1A1B1D;
   position: fixed;
   inset: 0;
   display: flex;
@@ -137,8 +144,19 @@ async function onSubmit() {
   overflow: hidden;
 }
 
+.login-pattern-bg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  opacity: 1;
+  pointer-events: none;
+  mask-image: radial-gradient(ellipse at center, transparent, #000);
+  -webkit-mask-image: radial-gradient(ellipse at center, transparent, #000);
+}
+
 .bg-page-logo {
   position: absolute;
+  z-index: 1;
   // left: -10%;
   // bottom: 30%;
   width: 100%;
@@ -161,6 +179,7 @@ async function onSubmit() {
   width: 900px;
   height: 480px;
   position: relative;
+  z-index: 2;
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: 24px;

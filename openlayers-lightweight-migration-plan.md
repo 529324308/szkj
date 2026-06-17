@@ -1,580 +1,657 @@
-# 轻量版 OpenLayers 迁移方案
+# OpenLayers 轻量版并存迁移方案
+
+## 迁移工作记录
+
+> 本文档既是迁移方案，也是后续执行阶段的工作记录。每次开始执行某个阶段、修改文件、新增能力、完成验证或发现遗留问题，都必须在本节追加记录。
+
+### 2026-06-16 方案修正
+
+当前策略：
+
+1. 保留 Cesium 高性能版，不删除 `cesium`、`vite-plugin-cesium`、`tdt-terrain-cesium-plugin`，不移除 Vite Cesium 插件配置。
+2. 新增 OpenLayers 轻量版，与 Cesium 高性能版并存；运行时由登录后的加载页检测本机硬件并给出推荐。
+3. 加载页提供两个入口按钮：`OpenLayers 轻量版` 和 `Cesium 高性能版`。系统只高亮推荐项，不强制自动进入。
+4. 分流默认规则：`balanced`、`high`、`flagship` 推荐 Cesium；`conservative`、`low` 推荐 OpenLayers。
+5. 用户手动选择版本后，将选择记录到本机 `localStorage`，推荐 key 为 `szkj:preferred-map-engine`，值为 `openlayers` 或 `cesium`。
+6. 所有 UI 布局保持现状；轻量版只替换调用 Cesium 方法的地方。三维专属能力在轻量版中按钮置灰不可点，并给出轻量版不支持提示。
+7. 首页地球旋转统一使用 `src/components/homeMap.vue` 组件，轻量版不初始化 Cesium 首页地球。
+
+已完成：
+
+| 时间 | 阶段 | 当前修改 | 新增/调整 | 完成功能 | 验证 | 遗留问题 |
+|---|---|---|---|---|---|---|
+| 2026-06-16 | 阶段一：方案修正 | 修正 `openlayers-lightweight-migration-plan.md` 的迁移目标、依赖边界、加载页分流策略、页面方法评估和阶段任务 | 文档明确 Cesium/OpenLayers 双版本并存；明确本机选择记忆；明确三维能力置灰规则 | 已完成并存迁移方案修正 | 已检查，无“删除 Cesium 依赖/Vite 插件”的执行建议残留 | 后续阶段尚未执行代码实现 |
+| 2026-06-16 | 阶段二：轻量版入口与加载页 | `src/App.vue` 改为按用户选择挂载 `CesiumMap` / `OpenLayersMap`；`src/components/LoadingPage.vue` 改为检测后展示双版本入口卡片并记忆本机选择；`src/utils/deviceProfile.js` 新增推荐引擎解析；新增 `src/components/OpenLayersMap.vue` 作为轻量版入口壳 | 支持检测后手动进入两个版本；`balanced/high/flagship` 推荐 Cesium，`conservative/low` 推荐 OpenLayers；WebGL 不可用时仍可进入轻量版 | 阶段二核心入口链路已落地 | `npm.cmd run build` 成功 | 轻量版地图壳目前仅完成初始化与 ready 回调，后续阶段继续补全业务能力 |
+| 2026-06-16 | 阶段四：二维地图操作迁移 | 按“抽共享壳”策略新增 `MapWorkspaceShell.vue` 边界；`CesiumMap.vue` 在轻量版下改为委派 OpenLayers 绘测、导入、地价控制器，保留现有 UI 壳和 Cesium 原逻辑 | 新增 `useOpenLayersDrawing.js`、`useOpenLayersImports.js`、`useOpenLayersLandPrice.js`；扩展 `mapGeometry.js` 的 OpenLayers KML 导出；扩展 `mapFeatureStyle.js` 的测绘/导入/地价/查询样式 | 轻量版支持标点、线/面/圆/矩形、测距/测面/方量/方位角/夹角，支持 SHP/KML/KMZ/CAD 导入显隐选中定位删除，支持地价节点加载、点选/多选/矩形/圆形/多边形查询和高亮 | `npm.cmd run build` 成功；dev server 在 `127.0.0.1:5173` 受权限限制，`127.0.0.1:5188` 可启动但 in-app browser 本地访问被拦截 | 仍需用真实业务数据在浏览器中手工验收 SHP/KMZ/DXF 解析、地价结果字段和 Cesium 高性能版回归 |
+
+执行阶段记录模板：
+
+| 时间 | 阶段 | 当前正在修改 | 新增文件 | 修改文件 | 完成功能 | 验证结果 | 遗留问题 |
+|---|---|---|---|---|---|---|---|
+| 待填写 | 待填写 | 待填写 | 待填写 | 待填写 | 待填写 | 待填写 | 待填写 |
 
 ## 1. 目标与边界
 
-本方案用于将当前 Cesium 地图主程序迁移为轻量版地图能力：不再使用 Cesium，不再引入 `vite-plugin-cesium`、`cesium`、`tdt-terrain-cesium-plugin`，地图引擎统一改为 OpenLayers。
+本方案目标不是把项目整体从 Cesium 替换成 OpenLayers，也不是移除 Cesium 依赖和 Vite 插件。目标是在同一套平台 UI 下并存两个地图运行版本：
 
-迁移目标：
+| 版本 | 地图引擎 | 使用场景 | 处理原则 |
+|---|---|---|---|
+| Cesium 高性能版 | Cesium | 硬件配置足够、需要三维地形、3D Tiles、真实高程、三维视角时使用 | 保留现有 `CesiumMap.vue` 和 `useCesium.js` 能力 |
+| OpenLayers 轻量版 | OpenLayers | 低配电脑、WebGL 压力大、需要更快进入二维业务地图时使用 | 新增轻量版地图壳，只替换地图方法调用，UI 保持一致 |
 
-1. 所有二维地图操作在 OpenLayers 中正常可用，包括底图切换、定位、坐标显示、比例尺、点线面绘制、量测、地价要素查询、SHP/KML/CAD 导入展示、巡检路线与轨迹回放。
-2. 所有三维专属操作从轻量版中剥离或降级展示，包括 Cesium 地球自转、真实三维地形、3D Tiles 倾斜模型、三维光照、相机俯仰、三维拾取、三维高程拾取。
-3. 首页不再依赖 Cesium 地球自转，改用独立 CSS/HTML 动效组件实现，来源为 Uiverse 示例：<https://uiverse.io/Lakshay-art/soft-dingo-98>。
-4. 页面业务结构尽量保持不变，优先替换地图引擎层和地图对象模型，避免重写业务 UI。
+轻量版必须支持的能力：
 
-轻量版定义：
-
-| 能力类型 | 轻量版处理 |
+| 能力类型 | 轻量版要求 |
 |---|---|
-| 二维底图、二维矢量、二维绘制、二维量测 | 必须支持 |
-| 文件导入后的二维展示 | 必须支持 |
-| 巡检路线、问题点、轨迹回放 | 必须支持 |
-| 地形、三维 Tileset、光照、真实高程、三维视角 | 不支持或降级 |
-| 首页视觉地球 | 使用独立 Uiverse 动效，不使用地图引擎 |
+| 二维底图 | 支持影像、矢量、注记等底图切换 |
+| 二维交互 | 支持缩放、平移、坐标显示、比例尺、定位 |
+| 二维绘制 | 支持标点、画线、画面、画圆、画矩形 |
+| 二维量测 | 支持测距、测面、方位角、夹角；方量仅按二维面积乘输入高度估算 |
+| 文件导入 | 支持 SHP、KML/KMZ、CAD/DXF 解析后的二维展示、定位、显隐、删除 |
+| 地价查询 | 支持点选、矩形、圆形、多边形等二维 Feature 查询 |
+| 巡检业务 | 支持路线、问题点、轨迹、回放进度点二维渲染 |
+| 首页地球 | 使用 `homeMap.vue` 视觉动效组件，不依赖 Cesium |
 
-## 2. 当前 Cesium 依赖清单
+轻量版不支持或降级的能力：
 
-当前地图依赖主要集中在以下文件：
+| 三维能力 | 轻量版处理 |
+|---|---|
+| Cesium 地球自转 | 使用 `homeMap.vue` 替代 |
+| 三维地形 | 按钮置灰不可点，提示“轻量版不支持三维地形” |
+| `tileset.json` / 3D Tiles 倾斜模型 | 按钮置灰不可点；如后续有二维轮廓服务，可作为二维图层加载 |
+| 三维真实高程拾取 | 高程显示为 `--` 或 `0`，不承诺真实高程 |
+| HDR、阴影、光照、大气 | 轻量版不展示相关配置 |
+| 相机 pitch/roll、三维俯仰 | OpenLayers 保持二维俯视，仅支持 view rotation |
+| 三维对象拾取 | 仅支持二维 Feature 拾取 |
 
-| 文件 | 当前职责 | 迁移处理 |
+## 2. 依赖与并存策略
+
+依赖处理原则：
+
+| 文件/依赖 | 当前职责 | 并存迁移处理 |
 |---|---|---|
-| `src/components/CesiumMap.vue` | 地图主壳、页面切换、绘制量测、导入、查询、巡检叠加 | 拆分为 `OpenLayersMap.vue` 或 `MapShell.vue`，保留业务 UI，替换地图调用 |
-| `src/composables/useCesium.js` | Cesium Viewer 初始化、底图、地形、3D Tiles、事件、性能、首页地球 | 新建 `src/composables/useOpenLayers.js`，只保留二维地图能力 |
-| `src/components/map/Home.vue` | 数治测绘工具栏与上传弹窗 | UI 可保留，事件接入 OpenLayers |
-| `src/components/map/LandPriceQuery.vue` | 地价图层树、查询工具栏、结果面板 | UI 可保留，矢量查询改为 OpenLayers Feature 查询 |
-| `src/components/map/SmartAnalysis.vue` | AI 对话、分析报告入口 | 与地图弱耦合，仅绘制入口接入 OpenLayers |
-| `src/components/map/DataManagement.vue` | 数据管理、巡检任务、轨迹回放入口 | 业务 UI 可保留，地图叠加改为 OpenLayers |
-| `src/components/map/InspectionPlaybackWindow.vue` | 独立 Cesium 轨迹回放窗口 | 改为 OpenLayers 小地图窗口 |
-| `src/App.vue`、`src/components/LoadingPage.vue`、`src/utils/deviceProfile.js` | Cesium 加载、WebGL 预热、渲染档位 | 改为轻量版加载检测，去掉 Cesium 预热和 3D 档位 |
-| `vite.config.js`、`src/main.js`、`package.json` | Cesium 插件、Cesium 样式、Cesium 依赖 | 移除 Cesium，新增 OpenLayers |
+| `package.json` 中的 `cesium` | Cesium 高性能版地图引擎 | 保留 |
+| `package.json` 中的 `vite-plugin-cesium` | Cesium Vite 构建支持 | 保留 |
+| `package.json` 中的 `tdt-terrain-cesium-plugin` | 天地图三维地形支持 | 保留 |
+| `package.json` 中的 `ol` | OpenLayers 轻量版地图引擎 | 保留或新增 |
+| `vite.config.js` | Cesium 插件、构建配置、base 配置 | 保留 Cesium 插件配置，不做删除 |
+| `src/main.js` | 全局样式入口 | 同时保留 `ol/ol.css` 与 `cesium/Source/Widgets/widgets.css` |
+| `src/components/CesiumMap.vue` | 高性能版主地图壳 | 保留，后续只在必要时补充与入口选择相关的 props/事件 |
+| `src/composables/useCesium.js` | Cesium Viewer、地形、Tileset、相机、性能监控 | 保留 |
+| `src/components/OpenLayersMap.vue` | 轻量版主地图壳 | 新增，与 `CesiumMap.vue` 并行 |
+| `src/composables/useOpenLayers.js` | OpenLayers 地图封装 | 新增或补齐 |
 
-建议新增：
+禁止事项：
+
+1. 不删除 Cesium 依赖。
+2. 不删除 Vite Cesium 插件。
+3. 不把 `CesiumMap.vue` 改造成 OpenLayers 组件。
+4. 不改变现有业务 UI 的布局、图标、弹窗和面板结构。
+5. 不用隐藏按钮代替降级；三维不可用按钮应置灰不可点，并给出提示。
+
+## 3. 运行时分流与加载页方案
+
+### 3.1 入口状态
+
+建议在 `App.vue` 增加以下运行态：
+
+| 状态 | 类型 | 说明 |
+|---|---|---|
+| `selectedMapEngine` | `ref('')` | 当前实际进入的地图版本：`openlayers` 或 `cesium` |
+| `recommendedMapEngine` | `ref('')` | 硬件检测后推荐版本 |
+| `preferredMapEngine` | `ref('')` | 本机 `localStorage` 记录的上次手动选择 |
+| `mapShouldMount` | `ref(false)` | 用户选择版本后才挂载地图组件 |
+| `deviceProfile` | `ref(null)` | 设备检测结果，供加载页展示和 Cesium 渲染档位使用 |
+| `renderPreset` | `ref(null)` | Cesium 渲染预设；轻量版可忽略或读取轻量策略 |
+
+`App.vue` 挂载规则：
+
+```vue
+<CesiumMap
+  v-if="mapShouldMount && selectedMapEngine === 'cesium'"
+  :device-profile="deviceProfile"
+  :render-preset="renderPreset"
+  @ready="onMapReady"
+  @logout="onLogout"
+/>
+
+<OpenLayersMap
+  v-if="mapShouldMount && selectedMapEngine === 'openlayers'"
+  :device-profile="deviceProfile"
+  @ready="onMapReady"
+  @logout="onLogout"
+/>
+```
+
+### 3.2 硬件推荐规则
+
+继续复用 `src/utils/deviceProfile.js` 的硬件检测能力，但输出结果用于推荐版本，而不是强制进入。
+
+| `benchmark.tierKey` | 推荐版本 |
+|---|---|
+| `flagship` | Cesium 高性能版 |
+| `high` | Cesium 高性能版 |
+| `balanced` | Cesium 高性能版 |
+| `conservative` | OpenLayers 轻量版 |
+| `low` | OpenLayers 轻量版 |
+| WebGL 不可用或检测异常 | OpenLayers 轻量版 |
+
+推荐函数建议：
+
+```js
+function resolveRecommendedMapEngine(profile) {
+  const tier = profile?.benchmark?.tierKey;
+  return ['balanced', 'high', 'flagship'].includes(tier) ? 'cesium' : 'openlayers';
+}
+```
+
+### 3.3 本机选择记忆
+
+| 配置 | 建议值 |
+|---|---|
+| localStorage key | `szkj:preferred-map-engine` |
+| 可选值 | `openlayers`、`cesium` |
+| 写入时机 | 用户点击加载页版本入口后 |
+| 读取时机 | 加载页展示按钮时 |
+| 使用方式 | 有本机偏好时可标注“上次选择”，但仍展示硬件推荐 |
+
+选择优先级：
+
+1. 用户当前点击的版本最高优先级。
+2. 加载页展示时，高亮硬件推荐项，同时显示本机上次选择标识。
+3. 不自动进入任何版本，必须由用户点击 `OpenLayers 轻量版` 或 `Cesium 高性能版`。
+
+### 3.4 加载页 UI 行为
+
+`LoadingPage.vue` 保持现有视觉风格，在检测完成后展示两个主按钮：
+
+| 按钮 | 行为 | 推荐态 | 禁用规则 |
+|---|---|---|---|
+| `OpenLayers 轻量版` | emit `enter-engine`，payload 为 `{ engine: 'openlayers' }` | 低配或 WebGL 异常时高亮推荐 | 不禁用 |
+| `Cesium 高性能版` | emit `enter-engine`，payload 为 `{ engine: 'cesium' }` | `balanced/high/flagship` 时高亮推荐 | WebGL 不可用时可置灰，并提示需要 WebGL |
+| `重新检测` | 清除检测缓存后重新跑分 | 无 | 不禁用 |
+
+加载文案调整：
+
+| 当前文案含义 | 并存方案文案 |
+|---|---|
+| 正在为当前设备匹配三维地图性能参数 | 正在为当前设备匹配地图版本 |
+| 正在预热 Cesium 资源 | 正在生成地图版本推荐 |
+| 正在进入三维场景 | 请选择进入的地图版本 |
+| 等待 Cesium ready | 等待所选地图版本就绪 |
+
+## 4. 首页地球旋转方案
+
+首页视觉地球统一使用 `src/components/homeMap.vue`：
+
+| 场景 | Cesium 高性能版 | OpenLayers 轻量版 |
+|---|---|---|
+| 平台首页显示 | 可继续使用现有 Cesium 首页场景，也可统一切换为 `homeMap.vue` | 必须使用 `homeMap.vue` |
+| 地球自转 | Cesium 相机旋转或 `homeMap.vue` | `homeMap.vue` CSS 动效 |
+| 进入业务模块 | Cesium `flyToOnLeaveHome` | OpenLayers `view.animate` |
+| 返回首页 | Cesium `enterHomeScene` 或首页 UI 状态 | 显示 `homeMap.vue`，地图交互隐藏或保持后台 |
+
+轻量版要求：
+
+1. 不调用 `enterHomeScene`、`startHomeEarthRotation`、`restoreInitialHomeCameraView` 等 Cesium 首页方法。
+2. `PortalHome.vue` 的指标、快捷入口、右侧图表 UI 保持不变。
+3. 在 `PortalHome.vue` 中挂载或透传 `homeMap.vue`，确保首页地球转动可见。
+
+## 5. 地图引擎方法总评估
+
+| Cesium 方法/能力 | 当前用途 | OpenLayers 替代方案 | 轻量版结论 | UI 处理 |
+|---|---|---|---|---|
+| `initCesium` | 初始化 Cesium Viewer | `initOpenLayers` 创建 `ol/Map` | 可替代 | 无 UI 改动 |
+| `destroyCesium` | 销毁 Viewer、事件、资源 | `destroyOpenLayers` + `map.setTarget(null)` | 可替代 | 无 UI 改动 |
+| `getViewer` | 获取 Viewer | `getMap` | 可替代 | 无 UI 改动 |
+| `setRenderPreset` | DPR、阴影、HDR、Tileset 细节 | 轻量版仅保留像素比、最大 Feature 数、聚合阈值等策略 | 降级 | 性能面板改文案 |
+| `subscribePerformanceStats` | FPS、相机、地形、Primitive、Tileset | 统计 FPS、图层数、Feature 数、交互状态 | 降级 | 三维指标隐藏或显示 `--` |
+| `addVecLayer` / `addCvaLayer` | 天地图矢量与注记 | `TileLayer + XYZ/WMTS` | 可替代 | 无 UI 改动 |
+| `addImgLayer` / `addCiaLayer` | 天地图影像与注记 | `TileLayer + XYZ/WMTS` | 可替代 | 无 UI 改动 |
+| `remove*Layer` | 移除底图图层 | `map.removeLayer` 或 `layer.setVisible(false)` | 可替代 | 无 UI 改动 |
+| `showGlobalImageryLayer` | 显示 Cesium 默认影像 | 显示 OpenLayers 默认底图组 | 可替代 | 文案改为“影像底图” |
+| `hideGlobalImageryLayer` | 隐藏 Cesium 默认影像 | 隐藏对应 TileLayer | 可替代 | 无 UI 改动 |
+| `enableNetworkTerrain` | 开启三维地形 | 不支持 | 不可用 | 按钮置灰 |
+| `disableTerrain` | 关闭三维地形 | 轻量版无真实地形 | 不可用/降级 | 三维地形项置灰 |
+| `add3DTileset` | 加载倾斜模型 | 不支持 3D Tiles；仅可加载服务端二维轮廓 | 不可用 | 上传/确认按钮置灰 |
+| `remove3DTileset` | 删除倾斜模型 | 删除列表记录或二维轮廓图层 | 降级 | 删除记录可用 |
+| `set3DTilesetStyle` | 3D Tiles 样式 | 二维 Feature style | 仅二维替代 | 3D 样式入口置灰 |
+| `addClickHandler` | Cesium 拾取 Entity/Tileset | `map.forEachFeatureAtPixel` | 二维可替代 | 无 UI 改动 |
+| `removeClickHandler` | 移除点击事件 | `unByKey` | 可替代 | 无 UI 改动 |
+| `addMouseMoveHandler` | 鼠标经纬度/高程 | `toLonLat(map.getCoordinateFromPixel())` | 可替代，高程降级 | 高程显示 `--` |
+| `addHeadingUpdateHandler` | 相机 heading | `view.getRotation()` | 二维旋转可替代 | 指南针保留 |
+| `addScaleUpdateHandler` | 比例尺/层级 | `view.getResolution()` | 可替代 | 无 UI 改动 |
+| `enterHomeScene` | 首页三维地球视角 | 显示 `homeMap.vue` | 替换 | 无 UI 改动 |
+| `stopHomeEarthRotation` | 停止 Cesium 地球旋转 | 停止或隐藏 CSS 动效 | 替换 | 无 UI 改动 |
+| `flyToOnLeaveHome` | 从首页飞行业务区 | `view.animate({ center, zoom })` | 二维可替代 | 无 UI 改动 |
+| `zoomToTargetPreservePitch` | 定位对象并保持 pitch | `view.fit(extent, padding)` | 可替代，pitch 移除 | 无 UI 改动 |
+
+## 6. 页面级评估
+
+### 6.1 登录页与加载页
+
+| 页面/方法 | 当前行为 | 轻量版并存方案 | 结论 | UI 处理 |
+|---|---|---|---|---|
+| `Login.vue` 登录成功 | emit success，进入加载页 | 保持不变 | 无地图改动 | UI 不变 |
+| `App.vue startLoadingFlow` | 重置状态并显示加载页 | 额外重置 `selectedMapEngine`、`recommendedMapEngine` | 需要调整 | UI 不变 |
+| `App.vue onProfileReady` | profile ready 后挂载 CesiumMap | 只保存检测结果和推荐版本，不立即挂载地图 | 需要调整 | UI 不变 |
+| `App.vue enterSystem` | Cesium ready 后关闭加载页 | 改为所选地图 ready 后关闭加载页 | 需要调整 | UI 不变 |
+| `LoadingPage.vue runDetection` | 检测 WebGL、CPU、GPU 并输出 Cesium preset | 保留检测，输出推荐版本和两个入口 | 需要调整 | 增加双按钮 |
+| `LoadingPage.vue enter-basic` | 超时后进入基础模式 | 改为进入 OpenLayers 轻量版 | 需要调整 | 文案改为轻量版 |
+| `deviceProfile.js buildRenderPreset` | 生成 Cesium 渲染档位 | 保留给 Cesium；新增推荐地图版本函数或在 LoadingPage 内计算 | 需要调整 | 无 UI 改动 |
+
+### 6.2 平台首页 `PortalHome.vue`
+
+| 操作/方法 | 当前行为 | OpenLayers 轻量版方案 | 结论 | UI 处理 |
+|---|---|---|---|---|
+| 首页展示 | Cesium 地球作为视觉背景，叠加首页 UI | 使用 `homeMap.vue` 作为地球旋转视觉组件 | 可替代 | UI 不变 |
+| `enter-module` | 触发 `enterModule`，Cesium 飞行到业务区 | 触发 OpenLayers `view.animate` 到业务中心 | 可替代 | UI 不变 |
+| 快捷入口按钮 | 切换顶部模块 | 保持 Vue 状态切换 | 可保留 | UI 不变 |
+| 首页性能检测胶囊 | 显示性能检测已开启 | 轻量版显示 OpenLayers 图层/Feature/FPS 概览 | 降级 | 文案可改 |
+| 首页图表与指标 | Vue 静态/业务数据展示 | 与地图引擎无关 | 可保留 | UI 不变 |
+
+### 6.3 数治测绘 `Home.vue`
+
+#### 绘制工具
+
+| 工具/方法 | 当前 Cesium 行为 | OpenLayers 替代 | 结论 | UI 处理 |
+|---|---|---|---|---|
+| `startTool('markPoint')` | 点击地球添加点 Entity | `Draw({ type: 'Point' })` 或 click 添加 Feature | 可替代 | UI 不变 |
+| `startTool('drawLine')` | 创建 Polyline Entity | `Draw({ type: 'LineString' })` | 可替代 | UI 不变 |
+| `startTool('drawPolygon')` | 创建 Polygon Entity | `Draw({ type: 'Polygon' })` | 可替代 | UI 不变 |
+| `startTool('drawCircle')` | 创建 Ellipse/Circle Entity | `Draw({ type: 'Circle' })`，导出时转 Polygon | 可替代 | UI 不变 |
+| `startTool('drawRect')` | 用 Cesium Rectangle 绘制 | `Draw` geometryFunction 或拖拽生成 Polygon | 可替代 | UI 不变 |
+| `resetDrawing` | 清除临时 Entity 和 Cesium handler | 移除当前 interaction，清理 sketch Feature | 可替代 | UI 不变 |
+| `createTempEntity` | 创建动态 Cesium Entity | 创建 sketch Feature 和临时样式 | 可替代 | UI 不变 |
+| `updateTempEntity` | 鼠标移动更新动态 Entity | Draw interaction 自动维护或 pointermove 更新 Feature | 可替代 | UI 不变 |
+| `finalizeDrawing` | 固化 Entity，写入测绘列表 | 固化 Feature，写入测绘列表 | 可替代 | UI 不变 |
+
+#### 量测工具
+
+| 工具/方法 | 当前 Cesium 行为 | OpenLayers 替代 | 结论 | UI 处理 |
+|---|---|---|---|---|
+| `measureDistance` | EllipsoidGeodesic 测距 | `ol/sphere.getLength` | 可替代 | UI 不变 |
+| `measureArea` | PolygonHierarchy + 面积计算 | `ol/sphere.getArea` 或 Turf | 可替代 | UI 不变 |
+| `measureVolume` | 面积 * 输入高度估算方量 | OpenLayers 面积 * 输入高度 | 可替代，但非真实三维方量 | 保留按钮和说明 |
+| `measureAzimuth` | 两点方位角 | 经纬度公式计算 | 可替代 | UI 不变 |
+| `measureAngle` | 三点夹角 | 平面向量夹角或地理计算 | 可替代 | UI 不变 |
+| `copyCoords` | 复制点坐标和高程 | 复制经纬度，高程为 `--` 或 `0` | 降级 | UI 不变 |
+| `exportCurrentKml` | Entity 转 KML | Feature/Geometry 转 KML | 可替代 | UI 不变 |
+| `deleteCurrentMeasure` | 删除 Entity | 删除 Feature | 可替代 | UI 不变 |
+| `clearAllMeasures` | 删除所有测绘 Entity | 清空测绘 VectorSource | 可替代 | UI 不变 |
+
+#### 测绘对象管理
+
+| 方法 | 当前行为 | OpenLayers 替代 | 结论 | UI 处理 |
+|---|---|---|---|---|
+| `registerMeasureEntity` | Entity 写入测绘列表 | Feature 写入测绘列表 | 可替代 | UI 不变 |
+| `registerMarkPointEntity` | 点 Entity 写入列表 | 点 Feature 写入列表 | 可替代 | UI 不变 |
+| `setMeasureEntityVisible` | Entity show 开关 | Feature `visible` 属性或分组 source 控制 | 可替代 | UI 不变 |
+| `setEntityHighlight` | 修改 Entity 材质/颜色 | Feature selected style 或 highlight layer | 可替代 | UI 不变 |
+| `selectSyInfoItem` | 定位并选中对象 | `view.fit` 或 `animateTo` + selected style | 可替代 | UI 不变 |
+| `deleteSyInfoItem` | 删除 Entity/DataSource/Tileset | 删除 Feature/Layer/记录 | 可替代，三维记录降级 | 三维记录置灰或仅删除记录 |
+
+#### 地形和模型入口
+
+| 操作/方法 | 当前 Cesium 行为 | OpenLayers 轻量版方案 | 结论 | UI 处理 |
+|---|---|---|---|---|
+| `openTerrainPanel` | 打开地形/tileset 输入面板 | 轻量版不支持三维地形/3D Tiles | 不可用 | 按钮置灰不可点 |
+| `confirmTerrain` | 开启网络地形或加载 3D Tiles | 不执行地图加载 | 不可用 | 面板入口置灰 |
+| `closeTerrain` | 关闭地形和模型 | 轻量版无三维模型 | 不可用 | 置灰 |
+| `toggleSyInfoItem(kind='terrain-network')` | 开关网络地形 | 不显示或置灰该项 | 不可用 | 置灰 |
+| `deleteTerrainModelItem` | 删除 3D Tileset | 删除已保存记录即可 | 降级 | 删除记录可用 |
+
+#### 文件导入
+
+| 导入/方法 | 当前 Cesium 行为 | OpenLayers 替代 | 结论 | UI 处理 |
+|---|---|---|---|---|
+| `confirmShpImport` | `shpjs` 转 GeoJSON，加载 Cesium DataSource | `shpjs` 转 GeoJSON，`ol/format/GeoJSON` 转 Feature | 可替代 | UI 不变 |
+| `styleImportedShpDataSource` | 设置 Cesium Entity 样式 | 设置 VectorLayer style | 可替代 | UI 不变 |
+| `openShpFeaturePopup` | 展示 SHP 属性浮窗 | 保留 Vue 浮窗，数据来自 Feature properties | 可替代 | UI 不变 |
+| `confirmKmlImport` | KML/KMZ 加载到 Cesium | `ol/format/KML` 读取 Feature | 可替代 | UI 不变 |
+| `confirmCadImport` | DXF 解析后生成 Entity | DXF 解析后生成 Feature | 可替代 | UI 不变 |
+| `cadApplyTransformParams` | CAD 坐标转换 | 继续使用 `proj4`，输出 OpenLayers 坐标 | 可替代 | UI 不变 |
+| `deleteShpImportItem` | 移除 DataSource | 移除 Layer 或清空 Source | 可替代 | UI 不变 |
+| `deleteKmlImportItem` | 移除 DataSource | 移除 Layer 或清空 Source | 可替代 | UI 不变 |
+| `deleteCadImportItem` | 移除 DataSource | 移除 Layer 或清空 Source | 可替代 | UI 不变 |
+
+### 6.4 数治地价 `LandPriceQuery.vue`
+
+#### 图层树与数据加载
+
+| 方法/操作 | 当前 Cesium 行为 | OpenLayers 替代 | 结论 | UI 处理 |
+|---|---|---|---|---|
+| `toggle-gongneng` | 展开/收起地价面板 | 与地图引擎无关 | 可保留 | UI 不变 |
+| `setGroupItems` | 批量勾选节点 | 批量设置 Feature 分组 visible | 可替代 | UI 不变 |
+| `toggleTab2Folder` | 展开/收起节点 | 与地图引擎无关 | 可保留 | UI 不变 |
+| `node-features-change` | 请求并加载节点 Feature | 加载到 `landPrice` VectorSource | 可替代 | UI 不变 |
+| `djcxAddNodeFeatures` | GeoJSONDataSource.load 到 Cesium | GeoJSON format 读取 Feature | 可替代 | UI 不变 |
+| `djcxRemoveNodeFeatures` | 移除 Cesium DataSource | 从 source 删除 nodeId Feature | 可替代 | UI 不变 |
+| `setDjcxDataSourcesVisible` | DataSource show 开关 | Feature/Layer visible 开关 | 可替代 | UI 不变 |
+
+#### 查询工具
+
+| 工具/方法 | 当前 Cesium 行为 | OpenLayers 替代 | 结论 | UI 处理 |
+|---|---|---|---|---|
+| `startTool('dianxuan')` | Cesium click pick 点选 | `forEachFeatureAtPixel` 点选 | 可替代 | UI 不变 |
+| `startTool('duodian')` | 多点选择/查询 | 维护多选 Feature 集合 | 可替代 | UI 不变 |
+| `startTool('dianPolygon')` | 绘制多边形查询 | `Draw Polygon` + Turf/geometry intersects | 可替代 | UI 不变 |
+| `startTool('dianCircle')` | 绘制圆形查询 | `Draw Circle` + 半径过滤 | 可替代 | UI 不变 |
+| `startTool('dianRect')` | 绘制矩形查询 | 拖拽 extent 或矩形 Polygon | 可替代 | UI 不变 |
+| `djcxQueryPoint` | 判断点是否落入 Entity geometry | `feature.getGeometry().intersectsCoordinate` 或 Turf | 可替代 | UI 不变 |
+| `djcxQueryRect` | 矩形范围查询 | `geometry.intersectsExtent` | 可替代 | UI 不变 |
+| `djcxQueryCircle` | 中心点半径查询 | 距离过滤 + geometry 相交 | 可替代 | UI 不变 |
+| `djcxQueryPolygon` | 多边形查询 | Turf booleanIntersects/within | 可替代 | UI 不变 |
+| `djcxShowFeatureInPanel` | Cesium Entity 属性入面板 | Feature properties 入面板 | 可替代 | UI 不变 |
+| `djcxShowFeaturesInTable` | 多结果表格 | Feature properties 表格 | 可替代 | UI 不变 |
+
+#### 样式与标签
+
+| 方法 | 当前 Cesium 行为 | OpenLayers 替代 | 结论 | UI 处理 |
+|---|---|---|---|---|
+| `djcxApplyEntityStyle` | Polygon material/outline/label | Feature style function | 可替代 | UI 不变 |
+| `djcxSetOutlineHighlightForEntity` | 修改 outline 高亮 | selected style 或 highlight layer | 可替代 | UI 不变 |
+| `djcxPickLabelLonLat` | 计算标签点 | 继续使用几何中心/避让计算，输出 Feature label | 可替代 | UI 不变 |
+| `djcxColorForLevel` | 等级颜色 | 继续复用颜色逻辑，输出 CSS color | 可替代 | UI 不变 |
+
+### 6.5 智能分析 `SmartAnalysis.vue`
+
+| 操作/方法 | 当前行为 | OpenLayers 轻量版方案 | 结论 | UI 处理 |
+|---|---|---|---|---|
+| 顶部 AI 按钮 | 打开 AI 对话 | 与地图引擎无关 | 可保留 | UI 不变 |
+| `startTool('ai')` | 激活 AI 工具状态 | 保留状态；如需要圈选区域，接入 OpenLayers Draw | 可替代 | UI 不变 |
+| `sendAiMessage` | 发送消息 | 与地图引擎无关 | 可保留 | UI 不变 |
+| AI 对话拖拽/缩放 | Vue + GSAP 动画 | 与地图引擎无关 | 可保留 | UI 不变 |
+| 地图分析结果定位 | Cesium flyTo/Entity 高亮 | OpenLayers `fit/animateTo` + Feature 高亮 | 可替代 | UI 不变 |
+
+### 6.6 数据管理 `DataManagement.vue` 与巡检
+
+#### 数据管理页
+
+| 操作/方法 | 当前行为 | OpenLayers 轻量版方案 | 结论 | UI 处理 |
+|---|---|---|---|---|
+| `openInspectionTasks` | 打开巡检任务面板 | 与地图引擎无关 | 可保留 | UI 不变 |
+| `handleInspectionTaskSelected` | 主地图渲染巡检路线 | VectorLayer 渲染路线 | 可替代 | UI 不变 |
+| `handleInspectionTaskCleared` | 清除巡检叠加 | 清空 inspection source | 可替代 | UI 不变 |
+| `handleInspectionRouteLocate` | 定位巡检路线 | `view.fit(route extent)` | 可替代 | UI 不变 |
+| `handleInspectionRouteIssues` | 展示问题点 | Point Feature + label | 可替代 | UI 不变 |
+| `handleInspectionTrackShow` | 显示轨迹 | LineString Feature + 当前点 Feature | 可替代 | UI 不变 |
+| `handleInspectionTrackProgress` | 更新回放进度 | 更新进度 LineString 和 marker | 可替代 | UI 不变 |
+| `handleInspectionTrackHide` | 隐藏轨迹 | 清除回放 Feature | 可替代 | UI 不变 |
+
+#### 巡检地图叠加方法
+
+| 方法 | 当前 Cesium 行为 | OpenLayers 替代 | 结论 | UI 处理 |
+|---|---|---|---|---|
+| `ensureInspectionDataSource` | 创建 Cesium CustomDataSource | 创建或获取 VectorSource/VectorLayer | 可替代 | UI 不变 |
+| `toInspectionPositions` | 转 Cartesian3 | 转 `fromLonLat` 坐标数组 | 可替代 | UI 不变 |
+| `createInspectionRouteEntity` | 创建 Polyline/Label Entity | 创建 LineString Feature + label 属性 | 可替代 | UI 不变 |
+| `renderInspectionTaskRoutes` | 渲染任务线路 | 添加路线 Feature | 可替代 | UI 不变 |
+| `highlightInspectionRoute` | 高亮路线 Entity | 设置 selected 属性或高亮图层 | 可替代 | UI 不变 |
+| `focusInspectionTarget` | `zoomToTargetPreservePitch` | `view.fit` | 可替代 | UI 不变 |
+| `renderInspectionIssues` | 添加问题点 Entity | 添加 Point Feature | 可替代 | UI 不变 |
+| `renderInspectionPlayback` | 添加轨迹、进度、marker Entity | 添加/更新 LineString 和 Point Feature | 可替代 | UI 不变 |
+
+#### 独立轨迹回放窗口
+
+| 组件/方法 | 当前行为 | OpenLayers 替代 | 结论 | UI 处理 |
+|---|---|---|---|---|
+| `InspectionPlaybackWindow.vue` | 内部初始化 Cesium Viewer | 内部初始化 OpenLayers Map | 需要改造 | 弹窗 UI 不变 |
+| `renderPlayback` | 绘制路线、轨迹、进度、问题点 | VectorLayer 多 Feature 渲染 | 可替代 | UI 不变 |
+| `viewer.flyTo` | 自动定位路线 | `view.fit(source extent)` | 可替代 | UI 不变 |
+| `destroy viewer` | 销毁 Cesium Viewer | `map.setTarget(null)` | 可替代 | UI 不变 |
+
+### 6.7 个人中心 `PersonalCenter.vue`
+
+| 操作 | 当前行为 | OpenLayers 轻量版方案 | 结论 | UI 处理 |
+|---|---|---|---|---|
+| 页面展示 | 用户中心 UI | 与地图引擎无关 | 可保留 | UI 不变 |
+| 顶部 Tab 切换 | 切换 activeTopTab | 与地图引擎无关 | 可保留 | UI 不变 |
+| 返回其他地图模块 | Cesium 可飞行 | OpenLayers `animateTo` | 可替代 | UI 不变 |
+
+## 7. OpenLayers 轻量版架构
+
+### 7.1 新增/补齐文件建议
 
 | 文件 | 职责 |
 |---|---|
-| `src/composables/useOpenLayers.js` | OpenLayers 地图引擎封装 |
-| `src/utils/mapGeometry.js` | 距离、面积、方位角、夹角、圆、多边形、KML 导出等纯计算 |
-| `src/utils/mapFeatureStyle.js` | 点线面、选中、高亮、查询、巡检样式 |
-| `src/components/OpenLayersMap.vue` | 轻量版主地图组件 |
-| `src/components/homeMap.vue` | 已新建的首页地球转动组件，承载 Uiverse 动效 |
-
-## 3. 技术选型
-
-| 类别 | 方案 |
-|---|---|
-| 地图引擎 | `ol` |
-| 默认投影 | 地图视图使用 `EPSG:3857`，业务经纬度使用 `EPSG:4326` |
-| 坐标转换 | `fromLonLat`、`toLonLat`、`transform` |
-| 底图 | OpenLayers `TileLayer` + `XYZ` 或 `WMTS` |
-| 矢量数据 | `VectorSource` + `VectorLayer` + `Feature` |
-| GeoJSON | `ol/format/GeoJSON` |
-| KML | `ol/format/KML`，KMZ 先解压后读 KML |
-| SHP | 继续使用现有 `shpjs` 转 GeoJSON，再进 OpenLayers |
-| CAD/DXF | 继续使用现有 `dxf-parser` + `proj4`，转换为 OpenLayers Feature |
-| 绘制交互 | `ol/interaction/Draw`、`Modify`、`Snap`、`Select` |
-| 弹窗 | `ol/Overlay` 或保留 Vue 浮层面板 |
-| 距离面积 | `ol/sphere`、Turf，复杂几何继续用 Turf |
-| 巡检回放 | VectorLayer 分层渲染路线、轨迹、进度线、当前位置点 |
-
-依赖调整：
-
-```bash
-npm install ol
-```
-
-安装后由 npm 写入当前稳定版本，方案文档不写死具体版本号。
-
-保留：`@turf/turf`、`proj4`、`dxf-parser`、`shpjs`、`pako`、`element-plus`、`gsap`。
-
-移除：`cesium`、`vite-plugin-cesium`、`tdt-terrain-cesium-plugin`。
-
-`src/main.js` 改为：
-
-```js
-import 'ol/ol.css';
-```
-
-`vite.config.js` 移除 Cesium 插件和 `sourcePrefix` 相关配置。
-
-## 4. 地图引擎接口迁移
-
-建议用 `useOpenLayers` 替代 `useCesium`，对上层暴露相近方法，降低页面改造量。
-
-| 当前方法 | Cesium 现状 | OpenLayers 轻量版实现 | 评估 |
-|---|---|---|---|
-| `initCesium` | 初始化 `Cesium.Viewer` | `new Map({ target, layers, view })` | 可完全替代，方法改名为 `initOpenLayers` |
-| `getViewer` | 返回 Cesium Viewer | 返回 OpenLayers `Map` 实例 | 可替代，建议改名 `getMap` |
-| `destroyCesium` | 销毁 Viewer 和事件 | `map.setTarget(null)`，清理交互和图层 | 可完全替代 |
-| `setRenderPreset` | DPR、HDR、阴影、Tileset 参数 | 仅保留轻量版性能参数，如矢量点数量上限、聚合阈值 | 降级 |
-| `subscribePerformanceStats` | 统计 FPS、Tileset、Primitive、影像层 | 统计图层数、Feature 数、交互状态、粗略 FPS | 可降级 |
-| `addVecLayer` | 添加天地图矢量 | 添加 `XYZ/WMTS TileLayer` | 可完全替代 |
-| `addCvaLayer` | 添加天地图矢量注记 | 添加注记 TileLayer | 可完全替代 |
-| `addImgLayer` | 添加天地图影像 | 添加影像 TileLayer | 可完全替代 |
-| `addCiaLayer` | 添加天地图影像注记 | 添加影像注记 TileLayer | 可完全替代 |
-| `removeVecLayer` 等 | 移除影像图层 | `map.removeLayer(layer)` | 可完全替代 |
-| `showGlobalImageryLayer` | 显示 Cesium 默认全球影像 | 轻量版无 Cesium 默认影像，改为“影像底图”或 OSM/天地图兜底 | 需替换语义 |
-| `hideGlobalImageryLayer` | 隐藏 Cesium 默认全球影像 | 切换底图 layer visible | 可替代 |
-| `enableNetworkTerrain` | 天地图三维地形 | OpenLayers 不支持真实三维地形 | 三维操作，轻量版不支持 |
-| `disableTerrain` | 回到椭球地形 | 无地形概念，改为关闭“地形/模型”列表状态 | 三维操作，降级 |
-| `add3DTileset` | 加载 `tileset.json` 倾斜模型 | OpenLayers 不能渲染 3D Tiles；仅记录条目、提示轻量版不支持，或要求后端提供二维轮廓 GeoJSON | 三维操作，不支持原能力 |
-| `remove3DTileset` | 移除 3D Tiles | 删除列表项或二维轮廓图层 | 降级 |
-| `set3DTilesetStyle` | 设置 3D Tiles 样式 | 不适用；二维轮廓可用 Feature Style | 三维操作，降级 |
-| `addClickHandler` | `scene.pick`、实体/3D Tiles 拾取 | `map.forEachFeatureAtPixel` + 坐标回传 | 二维实体可完全替代，3D Tiles 属性拾取不支持 |
-| `removeClickHandler` | 移除 Cesium click input | `unByKey(clickKey)` | 可完全替代 |
-| `addMouseMoveHandler` | 椭球拾取经纬度 | `toLonLat(map.getCoordinateFromPixel(pixel))` | 可完全替代，高程降级为 0 或 DEM 服务 |
-| `addHeadingUpdateHandler` | 相机 heading | `view.getRotation()` | 可替代，只有二维旋转角 |
-| `addScaleUpdateHandler` | 根据相机计算比例尺和 zoom | `view.getResolution()` + projection metersPerUnit | 可完全替代 |
-| `enterHomeScene` | 进入首页时恢复三维地球视角并自转 | 不再使用地图；显示 `homeMap.vue` | 三维操作，替换为 CSS 动效 |
-| `stopHomeEarthRotation` | 停止 Cesium 相机绕地球旋转 | 停止/隐藏 CSS 地球动画 | 替换 |
-| `flyToOnLeaveHome` | Cesium 相机飞到业务区 | OpenLayers `view.animate({ center, zoom })` | 可二维替代 |
-
-## 5. 首页地球转动方案
-
-首页轻量版不再启动 Cesium 地球。原 `enterHomeScene`、`startHomeEarthRotation`、`restoreInitialHomeCameraView` 这类三维相机逻辑全部移除。
-
-实现方案：
-
-1. 复用已新建的 `src/components/homeMap.vue`。
-2. 该组件承载 Uiverse 示例 <https://uiverse.io/Lakshay-art/soft-dingo-98> 中的 HTML/CSS 地球转动动效。
-3. 在 `PortalHome.vue` 中引入 `homeMap.vue`，作为首页视觉背景或主视觉元素使用。
-4. 组件内部只负责 CSS 动画，不依赖 OpenLayers，也不访问地图实例。
-5. 首页进入业务模块时，继续走 `enterModule`，轻量版地图执行 `view.animate` 到业务区域。
-
-建议组件职责：
-
-| 模块 | 职责 |
-|---|---|
-| `src/components/homeMap.vue` | 承载 Uiverse 地球动效代码 |
-| `PortalHome.vue` | 保留首页指标、入口、图表 UI，引入地球动效组件 |
-| `OpenLayersMap.vue` | 业务地图，首页时可保持初始化但隐藏交互，也可延迟到进入模块后初始化 |
-
-注意事项：
-
-- Uiverse 动效代码应作为独立样式命名空间，避免污染现有 `.portal-home` 样式。
-- 需要在代码注释中保留来源链接，便于后续维护。
-- 若该动效包含外部图片或字体，应下载到 `src/assets` 或改为纯 CSS，避免运行时额外网络依赖。
-- 该方案只替代首页视觉地球，不提供地图交互和地理坐标能力。
-
-## 6. 通用地图壳操作评估
-
-| 页面/区域 | 操作或方法 | 当前行为 | OpenLayers 迁移方案 | 评估 |
-|---|---|---|---|---|
-| 顶部 Tab | `selectTopTab` | 切换首页、测绘、地价、智能分析、数据管理、个人中心 | 保持现有 Vue 状态，进入非首页时调用 `view.animate` 到默认业务区 | 可保留 |
-| 顶部 Tab | `enterModule` | 从首页进入模块，触发 Cesium 飞行 | 改为 OpenLayers 动画缩放和平移 | 可替代 |
-| 首页状态 | `homeUiVisible`、`homeSidebarCollapsing` | 配合 Cesium 地球动画 | 保留 UI 动画，地图飞行动画独立处理 | 可保留 |
-| 地图容器 | `#cesiumContainer` | Cesium Viewer 容器 | 改为 `#openlayersContainer` 或 `ref` 容器 | 必改 |
-| 底部坐标 | `mouseCoords` | 鼠标移动拾取经纬度高程 | OpenLayers 鼠标坐标转经纬度，高程显示 `--` 或 DEM 服务值 | 可替代，高程降级 |
-| 比例尺 | `scaleBar` | Cesium 相机估算比例尺 | OpenLayers `ScaleLine` 或自定义 `resolution` 计算 | 可完全替代 |
-| 指南针 | `headingDeg`、`compassRotation` | Cesium camera heading | 使用 `view.getRotation()`；默认不旋转地图时固定北向 | 可替代 |
-| 图层面板 | `toggleLayerPanel` | 打开底图选择浮层 | 保留 UI，切换 OpenLayers 底图 layer visible | 可完全替代 |
-| 底图切换 | `setBaseLayer` | 全球影像、天地图、矢量图、注记图 | 使用天地图影像、天地图影像+注记、天地图矢量+注记等图层组合 | 可替代 |
-| 定位 | `locateToMe` | 浏览器定位后 Cesium `camera.flyTo`，添加点 | `navigator.geolocation` + `view.animate` + marker Feature | 可完全替代 |
-| 性能监控 | `performanceMonitor` | FPS、Tileset、Primitive、地形模式 | 改为图层数、Feature 数、交互状态、粗略 FPS，删除 Tileset/Primitive/地形项 | 降级可用 |
-| 点击空白 | `handleMapClick` | 取消选中、关闭面板 | `singleclick` 未命中 Feature 时执行同样逻辑 | 可完全替代 |
-| Feature 高亮 | `setEntityHighlight` | 修改 Cesium Entity 样式 | 给 Feature 设置选中 Style 或放入高亮层 | 可完全替代 |
-| 定位对象 | `zoomToTargetPreservePitch` | Cesium `zoomTo` 保持 pitch | `view.fit(featureExtent, padding)` | 可替代，pitch 移除 |
-
-## 7. 登录页与加载页评估
-
-| 页面 | 操作或方法 | 当前行为 | OpenLayers 迁移方案 | 评估 |
-|---|---|---|---|---|
-| `Login.vue` | 登录成功 | 进入加载页，之后挂载 CesiumMap | 保持不变，后续挂载 OpenLayersMap | 无地图改动 |
-| `App.vue` | `mapShouldMount` | 控制 CesiumMap 挂载 | 改为控制 OpenLayersMap 挂载 | 可替代 |
-| `App.vue` | `onMapReady` | 等待 Cesium ready | 等待 OpenLayers 初始底图和基础图层 ready | 可替代 |
-| `LoadingPage.vue` | 设备检测 | 检测 WebGL、GPU、Cesium 预热 | 改为检测浏览器、网络、DPR、Canvas、内存，删除 Cesium 预热 | 降级 |
-| `LoadingPage.vue` | `enter-basic` | 进入 Cesium 基础模式 | 进入轻量版基础底图模式 | 可替代 |
-| `deviceProfile.js` | `renderPreset` | 输出 Cesium 渲染档位、地形、Tileset 参数 | 输出 OpenLayers 矢量渲染策略，例如聚合阈值、最大可见 Feature 数、默认 zoom | 必改 |
-
-加载页文案需要同步替换：
-
-| 当前文案含义 | 轻量版文案 |
-|---|---|
-| 正在预热 Cesium 资源 | 正在加载轻量地图资源 |
-| 正在进入三维场景 | 正在进入二维地图 |
-| 三维地图性能参数 | 轻量地图性能参数 |
-| 地形、阴影、Tileset | 底图、矢量图层、交互性能 |
-
-## 8. 平台首页 `PortalHome.vue` 操作评估
-
-| 操作或方法 | 当前行为 | OpenLayers 迁移方案 | 评估 |
-|---|---|---|---|
-| 首页地球自转 | Cesium 相机绕地球旋转 | 使用 Uiverse `soft-dingo-98` 动效组件 | 替换，不使用地图 |
-| 首页指标卡片 | 静态/业务概览 UI | 保持原组件逻辑 | 无地图改动 |
-| 首页左侧快捷入口 | `emit('enter-module', key)` | 保持事件，进入模块时触发二维地图动画 | 可保留 |
-| 首页展开指标 | `statsExpanded` | 保持 UI | 无地图改动 |
-| 首页图表 | SVG 图表 | 保持 UI | 无地图改动 |
-| 进入数治测绘 | Cesium 飞到业务区 | `view.animate({ center: fromLonLat([119.48, 28.4585]), zoom })` | 可替代 |
-| 进入数治地价 | Cesium 飞到业务区 | 同上，必要时按地价数据范围 `fit` | 可替代 |
-| 进入数据管理 | Cesium 飞到业务区 | 同上，任务选中后按路线范围 `fit` | 可替代 |
-
-## 9. 数治测绘 `Home.vue` 操作评估
-
-### 9.1 绘制工具
-
-| 工具/方法 | 当前 Cesium 行为 | OpenLayers 迁移方案 | 评估 |
-|---|---|---|---|
-| `startTool('markPoint')` | 点击地图添加 Cesium point + label | `Draw({ type: 'Point' })` 或单击创建 Point Feature + Text Style | 可完全替代 |
-| `startTool('drawLine')` | 绘制 Polyline | `Draw({ type: 'LineString' })` | 可完全替代 |
-| `startTool('drawPolygon')` | 绘制 Polygon | `Draw({ type: 'Polygon' })` | 可完全替代 |
-| `startTool('drawCircle')` | 绘制 Cesium ellipse | `Draw({ type: 'Circle' })`，保存时转 Polygon 或保留 Circle geometry | 可完全替代 |
-| `startTool('drawRect')` | 两点生成 Rectangle | `Draw.createBox()` 或自定义 two-click box | 可完全替代 |
-| `createTempEntity` | 鼠标移动时创建临时 Entity、虚线、标签 | OpenLayers Draw 自带草图层；动态标签用 Overlay 或 sketch style | 可替代 |
-| `updateTempEntity` | 依赖 CallbackProperty 自动更新 | OpenLayers 通过 `drawstart/drawend`、`geometry.on('change')` 更新 | 可替代 |
-| `finalizeDrawing` | 完成绘制，注册实体、生成 label 和量测面板 | `drawend` 后写入 Feature 属性，添加结果标签 Feature/Overlay | 可完全替代 |
-| `resetDrawing` | 删除临时 Entity 和 handler | 移除当前 Interaction，清理 sketch/result layer | 可完全替代 |
-| 十字引导线 | 经线/纬线动态 Entity | OpenLayers 自定义 VectorLayer 动态画水平/垂直线 | 可替代，可选 |
-| 绘制提示标签 | Cesium Label 跟随鼠标 | Vue 浮层或 `Overlay` 跟随鼠标像素位置 | 可完全替代 |
-
-### 9.2 测量工具
-
-| 工具/方法 | 当前 Cesium 行为 | OpenLayers 迁移方案 | 评估 |
-|---|---|---|---|
-| `measureDistance` | 多点测距，使用 `EllipsoidGeodesic` | `ol/sphere.getLength` 或 Turf length | 可完全替代 |
-| `measureArea` | 多边形面积，当前通过 Turf/ENU 平面计算 | `ol/sphere.getArea` 或继续 Turf | 可完全替代 |
-| `measureVolume` | 当前本质为面积 * 输入高度 | OpenLayers 保留同样算法；若要求真实挖填方量则不支持 | 当前能力可替代，真实三维方量不支持 |
-| `measureAzimuth` | 两点方位角 | 继续使用经纬度球面方位角公式 | 可完全替代 |
-| `measureAngle` | 三点夹角，当前用三维向量 | 改为二维平面向量或球面近似 | 可替代 |
-| `polygonArea` | Cesium Cartesian + Turf 计算 | 改为直接使用经纬度/投影坐标 + Turf/OpenLayers | 可替代 |
-| `bearing` | Cesium 弧度转换 | 纯 JS 经纬度公式 | 可替代 |
-| `angleDeg` | Cesium Cartesian3 向量 | 二维坐标向量公式 | 可替代 |
-| `copyCoords` | 复制点位/测量点 | 保持业务逻辑，数据来自 Feature 属性 | 可完全替代 |
-| `copyAll` | 复制全部点、分段、累计距离 | 保持业务逻辑 | 可完全替代 |
-| `exportCurrentKml` | 从 Cesium Entity 导出 KML | 从 OpenLayers Feature geometry 导出 KML | 可完全替代 |
-
-### 9.3 测绘对象管理
-
-| 操作或方法 | 当前 Cesium 行为 | OpenLayers 迁移方案 | 评估 |
-|---|---|---|---|
-| `registerMeasureEntity` | 注册测量 Entity 到列表 | 注册 Feature 到测量图层和列表 | 可完全替代 |
-| `registerMarkPointEntity` | 注册标点 Entity | 注册 Point Feature | 可完全替代 |
-| `setMeasureEntityVisible` | Entity show | Feature 设置隐藏属性并刷新 style，或移入隐藏集合 | 可替代 |
-| `setMarkPointEntityVisible` | Entity show | 同上 | 可替代 |
-| `selectSyInfoItem` | 选中列表项并 `zoomTo` | 设置高亮 Style，`view.fit` 到 geometry extent | 可完全替代 |
-| `deleteMeasureEntity` | 删除 Entity、点、标签 | 从 VectorSource 删除 Feature 和关联标签 Feature | 可完全替代 |
-| `deleteMarkPointEntity` | 删除标点 | 从 VectorSource 删除 Feature | 可完全替代 |
-| `clearAllMeasures` | 清除所有测绘对象 | 清空测量图层、标点图层、状态 | 可完全替代 |
-
-### 9.4 地形和模型入口
-
-| 操作或方法 | 当前 Cesium 行为 | OpenLayers 迁移方案 | 评估 |
-|---|---|---|---|
-| `openTerrainPanel` | 打开地形/模型 URL 面板 | 可保留面板，但轻量版改名为“模型链接管理”或隐藏 | 三维操作，建议隐藏 |
-| `confirmTerrain` | 加载天地图地形和多个 `tileset.json` | OpenLayers 不渲染 3D Tiles；仅支持后端提供二维 GeoJSON/瓦片轮廓时展示 | 三维操作，不支持原能力 |
-| `closeTerrain` | 关闭地形和模型 | 清空三维模型列表状态或二维轮廓图层 | 降级 |
-| `toggleSyInfoItem(kind='terrain-network')` | 开关网络地形 | 轻量版不显示该项 | 三维操作，移除 |
-| `toggleSyInfoItem(kind='terrain-model')` | 开关 3D Tiles | 轻量版不显示，或仅开关二维轮廓 | 三维操作，降级 |
-| `deleteTerrainModelItem` | 移除 3D Tileset | 删除模型链接记录 | 降级 |
-
-建议：轻量版默认隐藏“添加地形”按钮。如果必须保留入口，应在面板内明确提示“轻量版不支持三维地形/倾斜模型，请上传二维 SHP/KML/CAD 或由服务端发布二维图层”。
-
-### 9.5 文件导入
-
-| 操作或方法 | 当前 Cesium 行为 | OpenLayers 迁移方案 | 评估 |
-|---|---|---|---|
-| `confirmShpImport` | `shpjs` 解析 zip，`GeoJsonDataSource` 加载 | `GeoJSON.readFeatures` 加入 VectorSource | 可完全替代 |
-| `styleImportedShpDataSource` | 设置 Cesium Entity 样式、轮廓、元数据 | 设置 Feature Style，元数据写入 Feature properties | 可完全替代 |
-| `openShpFeaturePopup` | 点击 SHP Entity 显示属性面板 | `forEachFeatureAtPixel` 读取 Feature properties | 可完全替代 |
-| `deleteShpImportItem` | 移除 dataSource | 移除 VectorLayer/清空 Source | 可完全替代 |
-| `confirmKmlImport` | `KmlDataSource.load` 加载 KML/KMZ | KML 用 `ol/format/KML`；KMZ 用 `pako`/解压后读取 KML | 可替代 |
-| `deleteKmlImportItem` | 移除 KML dataSource | 移除 KML VectorLayer | 可完全替代 |
-| `confirmCadImport` | `dxf-parser` 解析后添加 Cesium Entity | 保留解析与坐标转换，输出 Point/LineString/Polygon Feature | 可替代 |
-| `cadAppendEntityToDataSource` | DXF 实体转 Cesium Entity | 改为 DXF 实体转 OpenLayers Feature | 必改 |
-| `deleteCadImportItem` | 移除 CAD dataSource | 移除 CAD VectorLayer | 可完全替代 |
-| 导入图层显隐 | `dataSource.show` | `layer.setVisible(checked)` | 可完全替代 |
-| 导入图层定位 | `viewer.zoomTo(dataSource)` | `view.fit(vectorSource.getExtent())` | 可完全替代 |
-
-CAD 注意事项：
-
-- `TEXT/MTEXT` 可转成 Point Feature + Text Style。
-- `LINE/LWPOLYLINE/POLYLINE` 转 LineString 或 Polygon。
-- `CIRCLE/ARC` 采样为 LineString 或 Polygon。
-- `HATCH/SOLID/复杂块参照` 若当前解析不完整，轻量版保持“尽力展示”策略。
-
-## 10. 数治地价 `LandPriceQuery.vue` 操作评估
-
-### 10.1 图层树与数据加载
-
-| 操作或方法 | 当前 Cesium 行为 | OpenLayers 迁移方案 | 评估 |
-|---|---|---|---|
-| `getMenuTreeList` | 获取地价菜单树 | 保持接口 | 无地图改动 |
-| `onCheckNode` | 勾选节点后拉取要素 | 保持接口，返回 records 后转 GeoJSON Feature | 可保留 |
-| `onDjcxNodeFeaturesChange` | 调用 `djcxAddNodeFeatures` 或移除 | 改为添加/移除 VectorLayer 或按 nodeId 分组的 Feature | 可替代 |
-| `djcxAddNodeFeatures` | `GeoJsonDataSource.load` 加载面数据、添加标签和轮廓 Entity | `GeoJSON.readFeatures` 加入 VectorSource，样式函数生成填充、描边、文字 | 可完全替代 |
-| `djcxRemoveNodeFeatures` | 移除 Cesium DataSource | 从 source 删除 nodeId 对应 Feature 或移除 layer | 可完全替代 |
-| `setDjcxDataSourcesVisible` | 控制 dataSource show | 控制 layer visible | 可完全替代 |
-| `djcxGetAllFeatureEntities` | 获取全部 Entity | 获取全部 Feature | 可完全替代 |
-| `djcxApplyEntityStyle` | 改 Cesium polygon material | Feature Style 函数根据 `highlight` 属性返回样式 | 可完全替代 |
-| `djcxSetOutlineHighlightForEntity` | 额外 outline Entity 高亮 | 使用高亮描边 Style 或单独高亮层 | 可完全替代 |
-| `djcxClearHighlights` | 清除 Entity 高亮 | 清空高亮集合/重置属性 | 可完全替代 |
-| `djcxSetHighlights` | 批量高亮 | 设置高亮 Feature 集合 | 可完全替代 |
-
-### 10.2 查询工具
-
-| 工具/方法 | 当前 Cesium 行为 | OpenLayers 迁移方案 | 评估 |
-|---|---|---|---|
-| `startTool('dianxuan')` | 点击经纬度，点查地价面 | `singleclick` 坐标 + Turf/geometry intersects | 可完全替代 |
-| `startTool('duodian')` | 多点选择/取消多个要素 | `singleclick` 命中 Feature 后切换选中集合 | 可完全替代 |
-| `startTool('dianPolygon')` | 绘制多边形查询范围 | `Draw({ type: 'Polygon' })` 后空间查询 | 可完全替代 |
-| `startTool('dianCircle')` | 绘制圆形查询范围 | `Draw({ type: 'Circle' })`，转 Polygon 后查询 | 可完全替代 |
-| `startTool('dianRect')` | 绘制矩形查询范围 | `Draw.createBox()` 后查询 | 可完全替代 |
-| `djcxQueryPoint` | 判断点落在哪些 Entity 几何内 | Turf `booleanPointInPolygon` 或 OpenLayers geometry intersectsCoordinate | 可完全替代 |
-| `djcxQueryRect` | 矩形范围查询 | 用 extent 与 Feature extent 预筛，再 Turf 精筛 | 可完全替代 |
-| `djcxQueryCircle` | 半径范围查询 | Turf circle + intersects，或按距离预筛 | 可完全替代 |
-| `djcxQueryPolygon` | 多边形范围查询 | Turf intersects/within | 可完全替代 |
-| 查询范围绘制结果 | Cesium 临时 Entity | 查询图层 Feature + 标签 | 可完全替代 |
-| `djcxShowFeatureInPanel` | 单要素属性面板 | 保持 Vue 面板，数据来自 Feature properties | 可完全替代 |
-| `djcxShowFeaturesInTable` | 多要素表格 | 保持 Vue 表格，数据来自 Feature properties | 可完全替代 |
-
-### 10.3 地价标签与样式
-
-| 方法 | 当前 Cesium 行为 | OpenLayers 迁移方案 | 评估 |
-|---|---|---|---|
-| `djcxColorForLevel`、`djcxColorForRoman` | Cesium Color | 改为 CSS color string / `ol/color` | 可替代 |
-| `djcxPickLabelLonLat` | 计算多边形标签点 | 保留算法，输出经纬度后转投影 | 可替代 |
-| `djcxEntityCentroidLonLat` | Entity 中心点 | Feature geometry 内点/extent center/Turf centroid | 可替代 |
-| `djcxBuildQueryResultProperties` | 构建结果属性 | 保持纯业务逻辑 | 可保留 |
-
-## 11. 智能分析 `SmartAnalysis.vue` 操作评估
-
-| 操作或方法 | 当前行为 | OpenLayers 迁移方案 | 评估 |
-|---|---|---|---|
-| `startTool('ai')` | 打开 AI 对话面板 | 保持不变 | 无地图改动 |
-| AI 面板拖拽、缩放、关闭 | Vue + GSAP | 保持不变 | 无地图改动 |
-| `sendAiMessage` | 发送对话 | 保持不变 | 无地图改动 |
-| 分析报告按钮 | 当前触发 `drawPolygon` | 接入 OpenLayers `drawPolygon`，绘制分析范围 | 可替代 |
-| 未来 AI 地图指令 | 可通过 Cesium 操作地图 | 通过统一 `mapCommandBus` 调用 `view.fit`、开关图层、选中 Feature | 可扩展 |
-
-建议：智能分析不要直接依赖 OpenLayers 实例，统一通过上层提供的地图操作接口调用，避免再次和地图引擎强耦合。
-
-## 12. 数据管理 `DataManagement.vue` 与巡检操作评估
-
-### 12.1 数据管理页
-
-| 操作或方法 | 当前行为 | OpenLayers 迁移方案 | 评估 |
-|---|---|---|---|
-| 图层管理 | 当前是占位卡片 | 后续可接入 OpenLayers 图层注册表 | 可扩展 |
-| 上传云端 | 业务占位/上传 | 与地图无强耦合 | 保持 |
-| 本地查看 | 业务占位/预览 | 可复用 SHP/KML/CAD 导入图层能力 | 可扩展 |
-| 巡检任务列表 | Element 表格和抽屉 | 保持不变 | 无地图改动 |
-| 下发任务 | 上传 zip、调用接口 | 保持不变 | 无地图改动 |
-| 任务详情 | 路线卡片、问题、审核 | 保持不变 | 无地图改动 |
-
-### 12.2 巡检地图叠加
-
-| 操作或方法 | 当前 Cesium 行为 | OpenLayers 迁移方案 | 评估 |
-|---|---|---|---|
-| `ensureInspectionDataSource` | 创建 Cesium CustomDataSource | 创建巡检 VectorLayer 分组：路线层、问题点层、轨迹层、进度层 | 可替代 |
-| `renderInspectionTaskRoutes` | 绘制任务线路 polyline + label | LineString Feature + Text Style | 可完全替代 |
-| `highlightInspectionRoute` | 改路线 Entity 样式 | 修改 Feature selected 属性或高亮层 | 可完全替代 |
-| `focusInspectionTarget` | Cesium `zoomTo` | `view.fit(targetExtent, padding)` | 可完全替代 |
-| `renderInspectionIssues` | 问题点 point + label | Point Feature + Icon/Text Style | 可完全替代 |
-| `renderInspectionPlayback` | 路线、轨迹、进度线、当前位置点 | 多个 VectorLayer 渲染 LineString/Point | 可完全替代 |
-| `handleInspectionTaskSelected` | 任务选择后绘制路线 | 保持事件，调用 OpenLayers 渲染函数 | 可替代 |
-| `handleInspectionTaskCleared` | 清除巡检覆盖物 | 清空巡检 VectorSource | 可完全替代 |
-| `handleInspectionRouteLocate` | 定位路线 | `view.fit(routeFeature.getGeometry().getExtent())` | 可完全替代 |
-| `handleInspectionRouteIssues` | 显示问题点 | 添加问题点 Feature | 可完全替代 |
-| `handleInspectionTrackShow` | 显示轨迹 | 添加轨迹 Feature，并显示回放面板 | 可完全替代 |
-| `handleInspectionTrackProgress` | 更新轨迹进度 | 更新进度 LineString 和当前位置 Point | 可完全替代 |
-| `handleInspectionTrackHide` | 隐藏回放 | 清空轨迹层 | 可完全替代 |
-
-### 12.3 独立轨迹回放窗口
-
-| 操作或方法 | 当前 Cesium 行为 | OpenLayers 迁移方案 | 评估 |
-|---|---|---|---|
-| `InspectionPlaybackWindow.vue` `ensureViewer` | 弹窗内初始化 Cesium Viewer | 初始化 OpenLayers Map | 必改 |
-| `toPositions` | 经纬度转 Cartesian3 | 经纬度转 `fromLonLat` 坐标 | 可替代 |
-| `renderTrack` | Cesium Entity 绘制路线、轨迹、进度、问题 | VectorSource 添加 Feature，进度变化时更新 geometry | 可完全替代 |
-| `viewer.zoomTo` | 定位 dataSource | `view.fit(source.getExtent())` | 可完全替代 |
-| 弹窗销毁 | `viewer.destroy()` | `map.setTarget(null)` | 可完全替代 |
-
-## 13. 个人中心 `PersonalCenter.vue` 操作评估
-
-| 操作或方法 | 当前行为 | OpenLayers 迁移方案 | 评估 |
-|---|---|---|---|
-| 页面显示 | 覆盖地图的个人中心占位页 | 保持不变 | 无地图改动 |
-| 地图交互 | 无 | 无 | 无需迁移 |
-
-## 14. 数据模型迁移
-
-当前 Cesium Entity/DataSource/Primitive 模型建议统一迁移为 OpenLayers Feature/Layer 模型。
-
-| 当前模型 | 轻量版模型 |
-|---|---|
-| `viewer.entities` | `VectorSource` |
-| `CustomDataSource` | `VectorLayer + VectorSource` |
-| `GeoJsonDataSource` | `GeoJSON.readFeatures` |
-| `KmlDataSource` | `KML.readFeatures` |
-| `Entity.point` | `Feature(Point)` + Style image/circle |
-| `Entity.polyline` | `Feature(LineString)` |
-| `Entity.polygon` | `Feature(Polygon)` |
-| `Entity.rectangle` | `Feature(Polygon fromExtent)` |
-| `Entity.ellipse` | `Feature(Circle)` 或采样 Polygon |
-| `Entity.label` | Text Style 或 Overlay |
-| Entity 私有字段 `_measureData` 等 | Feature properties |
-| `dataSource.show` | `layer.setVisible()` |
-| `viewer.zoomTo(entity)` | `view.fit(feature.getGeometry().getExtent())` |
-
-建议保留当前私有字段语义，但迁移为 Feature 属性：
-
-```js
-feature.setProperties({
-  syKind: 'measure',
-  syMeasureData: {},
-  syMarkPointData: {},
-  syShpItemKey: '',
-  syKmlItemKey: '',
-  syCadItemKey: '',
-  djcxNodeId: '',
-  djcxFeatureKey: '',
-  inspectionType: 'route'
-});
-```
-
-## 15. 图层分组建议
-
-轻量版应建立统一图层注册表，避免散落 `map.addLayer`。
-
-| 图层组 | 内容 | 层级 |
-|---|---|---:|
-| `base` | 天地图影像/矢量/注记 | 0 |
-| `landPrice` | 地价 GeoJSON 面、标签 | 10 |
-| `imports` | SHP、KML、CAD 导入 | 20 |
-| `measure` | 测绘点线面和标签 | 30 |
-| `query` | 地价查询范围临时图形 | 40 |
-| `inspection` | 巡检路线、问题点、轨迹 | 50 |
-| `highlight` | 当前选中、高亮对象 | 80 |
-| `interaction` | 绘制草图、鼠标辅助线 | 90 |
-
-图层注册表结构示例：
-
-```js
-const layerRegistry = new Map();
-
-layerRegistry.set('measure', {
-  layer,
-  source,
-  type: 'vector',
-  visible: true,
-  featureCount: 0
-});
-```
-
-## 16. 三维能力降级规则
-
-| Cesium 能力 | 轻量版处理 | 用户可见表现 |
+| `src/components/OpenLayersMap.vue` | 轻量版主地图壳，复用现有页面组件和 UI 状态，只替换地图引擎调用 |
+| `src/composables/useOpenLayers.js` | OpenLayers 初始化、底图、事件、比例尺、定位、图层管理 |
+| `src/composables/useOpenLayersDrawing.js` | 绘制、量测、查询绘制 interaction |
+| `src/composables/useOpenLayersImports.js` | SHP/KML/CAD Feature 加载、样式、显隐、删除 |
+| `src/composables/useOpenLayersLandPrice.js` | 地价图层、查询、高亮、结果面板数据适配 |
+| `src/composables/useOpenLayersInspection.js` | 巡检路线、问题点、轨迹、回放进度渲染 |
+| `src/utils/mapGeometry.js` | 距离、面积、方位角、夹角、圆转面、KML 导出等纯计算 |
+| `src/utils/mapFeatureStyle.js` | 轻量版点线面、导入、地价、巡检、选中样式 |
+
+### 7.2 轻量版主组件职责
+
+`OpenLayersMap.vue` 应复用 `CesiumMap.vue` 的页面组织方式：
+
+1. 顶部标题栏、Tab、用户信息、退出按钮保持一致。
+2. `PortalHome`、`Home`、`LandPriceQuery`、`SmartAnalysis`、`DataManagement`、`PersonalCenter` 继续作为子组件使用。
+3. 地图容器从 `#cesiumContainer` 改为 `#openlayersContainer`。
+4. 底部经纬度、比例尺、图层面板、定位按钮、指南针继续保留。
+5. 三维功能按钮保留视觉位置，但置灰不可点。
+6. 通过 `emit('ready')` 通知加载页轻量版已可进入。
+
+### 7.3 数据模型映射
+
+| Cesium 数据对象 | OpenLayers 数据对象 | 迁移说明 |
 |---|---|---|
-| 首页三维地球自转 | Uiverse CSS 地球动效 | 首页仍有地球转动视觉 |
-| 三维地形 | 移除 | 不显示“添加地形”或提示轻量版不支持 |
-| `tileset.json` 倾斜模型 | 移除原渲染能力 | 提示上传二维数据或等待服务端二维化 |
-| 三维模型属性拾取 | 不支持 | 不展示 3D Tiles 属性面板 |
-| 相机 pitch/roll | 移除 | 地图保持二维俯视 |
-| HDR、阴影、光照、大气 | 移除 | 加载更快，视觉变为普通二维地图 |
-| 真实地形高程 | 降级为 `--` 或 DEM 服务 | 标点高程不再由地图引擎直接提供 |
-| 三维方量/挖填分析 | 不支持 | 当前面积 * 高度的简易方量可保留 |
+| `Entity` | `Feature` | 测绘、导入、地价、巡检对象统一 Feature 化 |
+| `CustomDataSource` | `VectorSource + VectorLayer` | 按业务分组建 source/layer |
+| `Cartesian3` | `EPSG:3857 coordinate` | UI 展示前用 `toLonLat` 转经纬度 |
+| `Cartographic` | `{ lon, lat, height }` | height 在轻量版为 `0` 或 `null` |
+| `Color` | CSS color string | 样式统一交给 `Style` |
+| `PolylineGraphics` | `LineString` | 绘制线、路线、轨迹 |
+| `PolygonGraphics` | `Polygon` | 地价面、测绘面、查询面 |
+| `LabelGraphics` | `Text style` 或 Vue 浮层 | 简单标签用 style，复杂弹窗保留 Vue |
+| `HeadingPitchRange` | `fit options` | pitch 不迁移 |
 
-## 17. 迁移步骤
+## 8. 三维能力置灰规则
 
-### 阶段一：依赖与地图壳替换
+轻量版不可用按钮必须满足：
 
-1. 安装 `ol`。
-2. 移除 Cesium 相关依赖和 Vite 插件。
-3. 新建 `useOpenLayers.js`。
-4. 新建 `OpenLayersMap.vue`，先完成底图、坐标、比例尺、定位、点击、鼠标移动。
-5. `App.vue` 从 `CesiumMap` 切换到 `OpenLayersMap`。
+1. 保留原位置和视觉层级，避免 UI 结构变化。
+2. 增加 `disabled`、置灰样式和 `cursor: not-allowed`。
+3. 点击不触发原 Cesium 方法。
+4. 悬浮或点击提示：“轻量版不支持三维能力，请在加载页选择 Cesium 高性能版。”
+
+置灰清单：
+
+| 页面 | 按钮/入口 | 原能力 | 轻量版处理 |
+|---|---|---|---|
+| 数治测绘 | 添加地形 | 网络三维地形、3D Tiles | 置灰不可点 |
+| 数治测绘 | 地形面板确定 | 加载 terrain/tileset | 置灰不可点 |
+| 图层/对象列表 | 网络地形项 | 显隐地形 | 置灰或不显示 |
+| 图层/对象列表 | 倾斜模型项 | 定位/显隐 3D Tiles | 置灰，删除记录可保留 |
+| 性能面板 | 地形/Tileset/HDR/阴影指标 | Cesium 渲染指标 | 显示 `--` 或替换为 OpenLayers 指标 |
+| 首页 | Cesium 地球自转控制 | 相机旋转 | 不显示，使用 `homeMap.vue` |
+
+## 9. 阶段任务
+
+### 阶段一：修正文档目标与架构
+
+目标：
+
+1. 修正本文档为双版本并存方案。
+2. 明确保留 Cesium 依赖、Vite 插件和高性能版。
+3. 明确加载页推荐 + 手动选择 + 本机记忆。
+4. 明确页面级方法评估、三维置灰规则、验收清单。
+
+交付物：
+
+| 文件 | 动作 |
+|---|---|
+| `openlayers-lightweight-migration-plan.md` | 重写并存迁移方案 |
+
+完成标准：
+
+1. 文档不再出现“移除 Cesium 依赖/Vite 插件”的执行建议。
+2. 文档包含按页面罗列的方法评估。
+3. 文档包含阶段任务和工作记录模板。
+
+### 阶段二：轻量版入口与加载页
+
+目标：
+
+1. `App.vue` 支持 `CesiumMap` 与 `OpenLayersMap` 双挂载分支。
+2. `LoadingPage.vue` 检测完成后展示两个版本入口按钮。
+3. 本机版本选择写入 `localStorage`。
+4. `balanced/high/flagship` 推荐 Cesium，`conservative/low` 推荐 OpenLayers。
+
+计划修改：
+
+| 文件 | 动作 |
+|---|---|
+| `src/App.vue` | 增加 `selectedMapEngine`、`recommendedMapEngine`、选择版本后的挂载逻辑 |
+| `src/components/LoadingPage.vue` | 增加双入口按钮、推荐态、本机上次选择提示 |
+| `src/utils/deviceProfile.js` | 保留 Cesium preset，补充地图版本推荐输出或工具函数 |
 
 验收：
 
-- 登录后能进入轻量版地图。
-- 默认天地图影像可显示。
-- 坐标、比例尺、定位、底图切换正常。
+1. 登录后不自动进入地图，检测完成后显示两个入口。
+2. 推荐项符合档位规则。
+3. 点击轻量版挂载 `OpenLayersMap`。
+4. 点击高性能版挂载 `CesiumMap`。
+5. 刷新后能读取本机上次选择。
 
-### 阶段二：首页替换
+### 阶段三：OpenLayers 地图壳
 
-1. 使用已新建的 `src/components/homeMap.vue`。
-2. 确认 Uiverse 示例已经封装在该组件内。
-3. `PortalHome.vue` 引入 `homeMap.vue`。
-4. 删除首页 Cesium 地球自转调用。
+目标：
 
-验收：
+1. 新增 `OpenLayersMap.vue`。
+2. 复用现有 UI 子组件。
+3. 初始化 OpenLayers 地图、底图、坐标、比例尺、图层切换、定位。
+4. 首页使用 `homeMap.vue`。
 
-- 首页无需 Cesium 即可显示转动地球动效。
-- 从首页进入各模块时地图能平滑进入业务区域。
+计划修改：
 
-### 阶段三：测绘工具迁移
-
-1. 接入 OpenLayers Draw/Select。
-2. 迁移标点、画线、画面、画圆、画矩形。
-3. 迁移测距、测面积、简易方量、方位角、夹角。
-4. 迁移对象列表、显隐、定位、删除、复制、导出 KML。
-
-验收：
-
-- 所有非三维测绘工具可完成绘制并出结果。
-- 结果列表、属性面板、KML 导出正常。
-
-### 阶段四：导入与地价查询迁移
-
-1. SHP 转 GeoJSON 后进入 VectorLayer。
-2. KML/KMZ 解析后进入 VectorLayer。
-3. CAD/DXF 解析后转换 Feature。
-4. 地价菜单树加载要素后转 Feature。
-5. 点查、多点、框选、圆选、多边形查询全部改为二维空间计算。
+| 文件 | 动作 |
+|---|---|
+| `src/components/OpenLayersMap.vue` | 新增轻量版地图主壳 |
+| `src/composables/useOpenLayers.js` | 补齐底图、事件、比例尺、定位、fit、图层管理 |
+| `src/components/map/PortalHome.vue` | 挂载或预留 `homeMap.vue` |
 
 验收：
 
-- 勾选地价节点后要素可显示、可高亮、可查询。
-- SHP/KML/CAD 可显示、可定位、可选中、可删除。
+1. 轻量版进入后顶部导航、首页、底部坐标、比例尺、图层按钮可见。
+2. 鼠标移动显示经纬度。
+3. 底图切换生效。
+4. 定位按钮可用。
+5. 退出登录可用。
+
+### 阶段四：二维地图操作迁移
+
+目标：
+
+1. 测绘工具全部迁移到 OpenLayers Feature。
+2. SHP/KML/CAD 二维导入、显隐、定位、删除可用。
+3. 地价 Feature 加载、查询、高亮、结果面板可用。
+
+计划修改：
+
+| 文件 | 动作 |
+|---|---|
+| `src/components/OpenLayersMap.vue` | 接入测绘、导入、地价事件 |
+| `src/composables/useOpenLayersDrawing.js` | 新增绘制和量测逻辑 |
+| `src/composables/useOpenLayersImports.js` | 新增导入图层逻辑 |
+| `src/composables/useOpenLayersLandPrice.js` | 新增地价图层和查询逻辑 |
+| `src/utils/mapGeometry.js` | 补齐 KML 导出、矩形、圆转面、方位角、夹角 |
+| `src/utils/mapFeatureStyle.js` | 补齐测绘、导入、地价、查询、高亮样式 |
+
+验收：
+
+1. 标点、画线、画面、画圆、画矩形可用。
+2. 测距、测面、方位角、夹角可用。
+3. 方量按二维面积和输入高度估算。
+4. SHP/KML/CAD 导入后可显示、选中、弹窗、删除。
+5. 地价点选、矩形、圆形、多边形查询可用。
 
 ### 阶段五：巡检叠加与回放
 
-1. 迁移任务路线渲染。
-2. 迁移路线定位、高亮。
-3. 迁移问题点展示。
-4. 迁移主地图轨迹回放。
-5. 迁移独立回放窗口为 OpenLayers。
+目标：
+
+1. 巡检任务路线在轻量版地图展示。
+2. 问题点、轨迹、回放进度可展示。
+3. 独立回放窗口改为 OpenLayers 小地图。
+
+计划修改：
+
+| 文件 | 动作 |
+|---|---|
+| `src/composables/useOpenLayersInspection.js` | 新增巡检渲染逻辑 |
+| `src/components/OpenLayersMap.vue` | 接入 DataManagement emit 的巡检事件 |
+| `src/components/map/InspectionPlaybackWindow.vue` | 内部地图从 Cesium 改为 OpenLayers |
 
 验收：
 
-- 选择任务后路线显示正常。
-- 查看问题、轨迹回放、进度拖动正常。
-- 弹窗小地图不再加载 Cesium。
+1. 选择巡检任务后路线显示。
+2. 定位路线时地图 fit 到路线范围。
+3. 查看问题时问题点显示。
+4. 轨迹回放时进度线和当前位置点更新。
+5. 独立回放窗口不再依赖 Cesium。
 
-### 阶段六：清理与验收
+### 阶段六：三维能力降级与验收
 
-1. 清理全部 `import * as Cesium from 'cesium'`。
-2. 清理全部 `Cesium.*` 调用。
-3. 清理 `vite-plugin-cesium` 配置。
-4. 清理 Cesium 样式导入。
-5. 更新加载页文案。
-6. 构建并回归主要业务流程。
+目标：
 
-验收命令：
+1. 轻量版所有三维按钮置灰不可点。
+2. 补齐提示文案和样式。
+3. 完成构建和场景验收。
 
-```bash
-npm run build
-```
+计划修改：
 
-## 18. 验收清单
-
-| 页面 | 验收项 |
+| 文件 | 动作 |
 |---|---|
-| 登录/加载 | 登录后进入轻量版加载流程，无 Cesium 预热文案 |
-| 首页 | Uiverse 地球动效正常转动，首页入口可进入各模块 |
-| 通用地图 | 底图切换、定位、坐标、比例尺、指南针可用 |
-| 数治测绘 | 标点、线、面、圆、矩形绘制可用 |
-| 数治测绘 | 测距、测面积、简易方量、方位角、夹角可用 |
-| 数治测绘 | 测绘对象列表显隐、定位、删除、复制、KML 导出可用 |
-| 数治测绘 | SHP、KML/KMZ、CAD 导入展示、定位、删除可用 |
-| 数治地价 | 菜单树勾选加载数据，点查、多选、框选、圆选、多边形查询可用 |
-| 智能分析 | AI 面板可用，分析范围绘制可用 |
-| 数据管理 | 巡检任务路线、问题点、轨迹回放可用 |
-| 个人中心 | 页面正常覆盖地图，不受地图引擎影响 |
-| 三维能力 | 地形、3D Tiles、光照、三维相机能力不出现在轻量版主流程 |
+| `src/components/map/Home.vue` | 支持传入轻量版能力开关，地形按钮置灰 |
+| `src/components/OpenLayersMap.vue` | 传入 light capability flags |
+| `src/components/LoadingPage.vue` | 提示可切换到 Cesium 高性能版 |
+| `openlayers-lightweight-migration-plan.md` | 追加阶段执行记录和验收结果 |
 
-## 19. 风险与处理
+验收：
+
+1. 轻量版地形/3D Tiles 相关入口不可点。
+2. 不可用按钮有明确提示。
+3. Cesium 高性能版原三维能力可继续使用。
+4. `npm run build` 成功。
+5. 文档工作记录更新完整。
+
+## 10. 验收清单
+
+| 验收项 | 标准 |
+|---|---|
+| 依赖并存 | `cesium`、`vite-plugin-cesium`、`tdt-terrain-cesium-plugin`、`ol` 同时保留 |
+| 构建配置 | Vite Cesium 插件保留，OpenLayers 正常打包 |
+| 加载页选择 | 检测完成后显示两个版本入口，由用户点击进入 |
+| 推荐规则 | `balanced/high/flagship` 推荐 Cesium；`conservative/low` 推荐 OpenLayers |
+| 本机记忆 | 用户选择写入 `szkj:preferred-map-engine` |
+| Cesium 版本 | 进入高性能版后现有三维功能不回退 |
+| OpenLayers 版本 | 进入轻量版后不初始化 Cesium Viewer |
+| UI 一致 | 顶栏、Tab、首页、工具栏、面板、弹窗布局保持一致 |
+| 二维能力 | 底图、定位、坐标、比例尺、绘制、量测、导入、查询、巡检可用 |
+| 三维降级 | 地形、3D Tiles、真实高程、HDR/阴影、pitch/roll 置灰或显示不可用 |
+| 首页地球 | 轻量版首页使用 `homeMap.vue` |
+| 构建验证 | `npm run build` 成功 |
+
+## 11. 风险与处理
 
 | 风险 | 影响 | 处理 |
 |---|---|---|
-| 业务代码大量直接操作 Cesium Entity | 改造面较大 | 先做 `useOpenLayers` 适配层，再逐步替换 Entity 为 Feature |
-| 3D Tiles 数据没有二维替代 | 地形模型无法显示 | 要求服务端提供 GeoJSON/MVT/WMS/WMTS 二维成果，或轻量版隐藏入口 |
-| CAD 坐标系复杂 | 位置偏移 | 继续保留现有 `proj4` 坐标配置表单，导入后提供定位校验 |
-| 大量 GeoJSON 面导致卡顿 | 低配设备性能下降 | 分层加载、按视野显示、样式缓存、必要时服务端切片为 MVT |
-| KMZ 内含图片样式 | 样式还原不完整 | 轻量版优先还原几何与基础属性，复杂图标样式降级 |
-| 高程字段缺失 | 标点高程无法显示 | 显示 `--`，或接入 DEM/高程服务作为增强能力 |
+| `CesiumMap.vue` 业务逻辑过大，直接复制成本高 | 轻量版实现容易遗漏状态 | 分阶段抽取通用状态，优先保留 UI 子组件和事件协议 |
+| 轻量版与高性能版状态不一致 | 两套版本体验不一致 | 明确 Feature 数据模型，保持页面 props/emits 一致 |
+| 地形和 3D Tiles 用户误解为可用 | 低配版点击失败 | 按钮置灰、提示切换 Cesium 高性能版 |
+| 文件导入坐标系复杂 | CAD/SHP 显示位置偏移 | 继续复用 `proj4` 和现有坐标系表单，增加导入后 fit/预览 |
+| 地价查询几何判断差异 | 查询结果与 Cesium 版略有差异 | 使用 Turf 做相交/包含判断，并记录差异 |
+| 本机记忆覆盖硬件推荐 | 用户可能一直进入不适合版本 | 同时显示“硬件推荐”和“上次选择”，由用户最终点击 |
 
-## 20. 整体总结
+## 12. 整体总结
 
-轻量版迁移的核心不是把 Cesium API 一对一改成 OpenLayers API，而是把当前混在 `CesiumMap.vue` 里的地图引擎能力抽成二维 Feature/Layer/Interaction 模型。
+本次迁移采用“并存分流”而不是“替换删除”：
 
-OpenLayers 可以完整承接本项目绝大多数业务操作：底图、坐标、比例尺、定位、绘制、量测、地价查询、文件导入、巡检路线、轨迹回放都能正常实现。需要明确剥离的是三维能力：地形、3D Tiles、三维光照、相机俯仰和三维拾取。
-
-首页原本依赖 Cesium 的地球自转，在轻量版中改为 Uiverse 动效组件：<https://uiverse.io/Lakshay-art/soft-dingo-98>。这样首页仍保留“地球转动”的视觉记忆，但业务地图从三维场景切换为轻量二维地图，整体启动更快、依赖更少、低配设备更稳定。
+1. Cesium 高性能版继续承载三维地形、3D Tiles、真实高程和高性能三维场景。
+2. OpenLayers 轻量版承载低配电脑下的二维业务能力，确保进入更快、资源占用更低。
+3. 登录后的加载页负责硬件检测、推荐版本、手动选择和本机选择记忆。
+4. 页面 UI 保持一致，只替换地图引擎调用；三维能力在轻量版中置灰不可点。
+5. 后续每个执行阶段都必须在本文档顶部追加工作记录，写清楚当前修改、新增内容、完成功能、验证结果和遗留问题。

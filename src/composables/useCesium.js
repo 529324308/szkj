@@ -556,11 +556,14 @@ export function useCesium(containerId, options = {}) {
 		if (!viewer) return;
 		enableRealtimeLighting();
 		const duration = Math.max(Number(options.duration ?? 1.6), 0);
+		const shouldStartRotation = options.startRotation !== false;
 		stopHomeEarthRotation();
 		captureInitialHomeCameraView();
 		clearHomeRotationStartTimer();
 		await restoreInitialHomeCameraView({ duration });
-		startHomeEarthRotation();
+		if (shouldStartRotation) {
+			startHomeEarthRotation();
+		}
 	}
 
 	// 从首页切换到其他页面时触发相机飞行（与首页侧边栏收起动画同步启动）。
@@ -827,6 +830,10 @@ export function useCesium(containerId, options = {}) {
 		stopPerformanceMonitor();
 		if (viewer) {
 			stopHomeEarthRotation();
+			Object.values(currentTilesetList).forEach((tileset) => {
+				tileset?._cameraAdaptiveCleanup?.();
+			});
+			currentTilesetList = {};
 			if (realtimeLightingHandler) {
 				viewer.clock.onTick.removeEventListener(realtimeLightingHandler);
 				realtimeLightingHandler = null;
@@ -837,6 +844,16 @@ export function useCesium(containerId, options = {}) {
 			}
 			viewer.destroy();
 		}
+		const target = typeof containerId === 'string' ? document.getElementById(containerId) : containerId?.value;
+		if (target?.replaceChildren) target.replaceChildren();
+		viewer = null;
+		globalImageryLayer = null;
+		vecImageryLayer = null;
+		cvaImageryLayer = null;
+		imgImageryLayer = null;
+		ciaImageryLayer = null;
+		tdtTerrainProvider = null;
+		defaultLightingState = null;
 		initialHomeCameraView = null;
 		realtimeLightingLastSyncMs = 0;
 		performanceStats.frameCount = 0;

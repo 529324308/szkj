@@ -1,4 +1,5 @@
 <template>
+	<MapWorkspaceShell :controller="mapWorkspaceController">
 	<div class="cesium-box">
 		<!-- 顶部 标题栏、Tab 切换、登出 -->
 		<div class="bt">
@@ -53,6 +54,20 @@
 				<div class="acction" :title="currentUserName">{{ currentUserName }}</div>
 			</div>
 			<div class="dianyuan" @click="confirmLogout"></div>
+		</div>
+
+		<div
+			v-if="isOpenLayersEngine && openLayersHomeEarthVisible"
+			class="openlayers-home-earth"
+			:class="{
+				'openlayers-home-earth--visible': openLayersHomeEarthVisible,
+				'openlayers-home-earth--leaving': openLayersHomeEarthLeaving,
+			}"
+			aria-hidden="true"
+		>
+			<div class="openlayers-home-earth__inner">
+				<HomeMap />
+			</div>
 		</div>
 
 		<!-- 1. 平台首页 -->
@@ -397,8 +412,18 @@
 		</div>
 
 		<!-- 地图容器 -->
-		<div id="cesiumContainer" style="width: 100%; height: 100vh;"></div>
+		<div
+			id="cesiumContainer"
+			class="map-engine-container"
+			:class="{
+				'map-engine-container--openlayers': isOpenLayersEngine,
+				'map-engine-container--ol-home': isOpenLayersEngine && openLayersHomeEarthVisible && !openLayersHomeEarthLeaving,
+				'map-engine-container--ol-transition': isOpenLayersEngine && openLayersHomeEarthLeaving,
+			}"
+			style="width: 100%; height: 100vh;"
+		></div>
 	</div>
+	</MapWorkspaceShell>
 </template>
 
 <script setup>
@@ -408,16 +433,23 @@ import { gsap } from 'gsap';
 import { centroid as turfCentroid, polygon as turfPolygon } from '@turf/turf';
 import proj4 from 'proj4';
 import { useCesium } from '../composables/useCesium';
+import { useOpenLayers } from '../composables/useOpenLayers';
+import { useOpenLayersDrawing } from '../composables/useOpenLayersDrawing';
+import { useOpenLayersImports } from '../composables/useOpenLayersImports';
+import { useOpenLayersLandPrice } from '../composables/useOpenLayersLandPrice';
+import { buildOpenLayersKmlPlacemark, safeFileName as safeMapFileName } from '../utils/mapGeometry';
 import { ElMessage, ElMessageBox } from 'element-plus';
 // import { getLandPriceLayers } from '../api/map';
 
 // 导入子组件
+import MapWorkspaceShell from './MapWorkspaceShell.vue';
 import PortalHome from './map/PortalHome.vue';
 import Home from './map/Home.vue';
 import LandPriceQuery from './map/LandPriceQuery.vue';
 import SmartAnalysis from './map/SmartAnalysis.vue';
 import DataManagement from './map/DataManagement.vue';
 import PersonalCenter from './map/PersonalCenter.vue';
+import HomeMap from './homeMap.vue';
 
 const props = defineProps({
 	deviceProfile: {
@@ -428,8 +460,18 @@ const props = defineProps({
 		type: Object,
 		default: null,
 	},
+	mapEngine: {
+		type: String,
+		default: 'cesium',
+		validator: (value) => ['cesium', 'openlayers'].includes(value),
+	},
+	homeActive: {
+		type: Boolean,
+		default: true,
+	},
 });
 const emit = defineEmits(['logout', 'ready']);
+const isOpenLayersEngine = computed(() => props.mapEngine === 'openlayers');
 const TERRAIN_INPUT_STORAGE_KEY = 'terrainInputUrl';
 const TERRAIN_NAME_STORAGE_KEY = 'terrainInputName';
 const MESSAGE_OFFSET_TOP = 200;
@@ -520,7 +562,28 @@ const {
 	flyToOnLeaveHome,
 } = useCesium(containerId, { renderPreset: props.renderPreset });
 
+const openLayersApi = useOpenLayers(containerId, { baseLayer: 'tdt-img' });
+const {
+	initOpenLayers,
+	destroyOpenLayers,
+	addClickHandler: addOpenLayersClickHandler,
+	removeClickHandler: removeOpenLayersClickHandler,
+	addMouseMoveHandler: addOpenLayersMouseMoveHandler,
+	removeMouseMoveHandler: removeOpenLayersMouseMoveHandler,
+	addHeadingUpdateHandler: addOpenLayersHeadingUpdateHandler,
+	removeHeadingUpdateHandler: removeOpenLayersHeadingUpdateHandler,
+	addScaleUpdateHandler: addOpenLayersScaleUpdateHandler,
+	removeScaleUpdateHandler: removeOpenLayersScaleUpdateHandler,
+	setBaseLayer: setOpenLayersBaseLayer,
+	animateTo: animateOpenLayersTo,
+} = openLayersApi;
+
+let olDrawing = null;
+let olImports = null;
+let olLandPrice = null;
+
 watch(() => props.renderPreset, (nextPreset) => {
+	if (isOpenLayersEngine.value) return;
 	if (!nextPreset) return;
 	setRenderPreset(nextPreset);
 }, { deep: true });
@@ -536,6 +599,12 @@ const topTabs = [
 ];
 const activeTopTab = ref(topTabs[0].key);
 const activeTool = ref(null);
+const mapWorkspaceController = computed(() => ({
+	engine: props.mapEngine,
+	isOpenLayers: isOpenLayersEngine.value,
+	activeTopTab: activeTopTab.value,
+	activeTool: activeTool.value,
+}));
 
 const currentUserName = ref(localStorage.getItem('userName') || '未知用户');
 const AI_DRAG_NO_SELECT_CLASS = 'ai-chat-no-select';
@@ -749,6 +818,143 @@ let djcxLoadingTimer = null;
 let djcxLoadingToken = 0;
 let djcxMultiSelectedKeys = [];
 let unsubscribePerformanceStats = null;
+let globeReadyCleanup = null;
+
+const OPENLAYERS_DRAW_TOOLS = new Set([
+	'markPoint',
+	'drawLine',
+	'drawPolygon',
+	'drawCircle',
+	'drawRect',
+	'measureDistance',
+	'measureArea',
+	'measureVolume',
+	'measureAzimuth',
+	'measureAngle',
+	'dianPolygon',
+	'dianCircle',
+	'dianRect',
+]);
+
+function ensureOpenLayersControllers() {
+	if (olDrawing && olImports && olLandPrice) {
+		return { drawing: olDrawing, imports: olImports, landPrice: olLandPrice };
+	}
+	olDrawing = useOpenLayersDrawing(openLayersApi, {
+		onHint: (hint) => {
+			drawingHint.value = hint || '';
+		},
+		onCreate: handleOpenLayersDrawingCreate,
+		onSelect: handleOpenLayersDrawingSelect,
+		onQueryComplete: handleOpenLayersQueryComplete,
+		onFinished: () => {
+			activeTool.value = null;
+		},
+	});
+	olImports = useOpenLayersImports(openLayersApi, {
+		onChange: bumpSyInfoListVersion,
+		onOpenFeaturePopup: openShpFeaturePopup,
+	});
+	olLandPrice = useOpenLayersLandPrice(openLayersApi, {
+		onChange: bumpSyInfoListVersion,
+	});
+	return { drawing: olDrawing, imports: olImports, landPrice: olLandPrice };
+}
+
+function clearOpenLayersSelectionState(options = {}) {
+	if (!options.keepDrawingSelection) olDrawing?.clearSelection?.();
+	if (!options.keepImportSelection) olImports?.clearSelection?.();
+	currentMeasureEntity = null;
+	currentMeasurePoints = [];
+	selectedMarkPointEntityId.value = '';
+	selectedTerrainItemKey.value = '';
+	selectedShpItemKey.value = '';
+	selectedKmlItemKey.value = '';
+	selectedCadItemKey.value = '';
+}
+
+function handleOpenLayersDrawingCreate({ kind, feature, data }) {
+	ensureOpenLayersControllers();
+	olImports?.clearSelection?.();
+	closeShpFeaturePopup();
+	selectedTerrainItemKey.value = '';
+	selectedShpItemKey.value = '';
+	selectedKmlItemKey.value = '';
+	selectedCadItemKey.value = '';
+	currentMeasureEntity = feature;
+	currentMeasurePoints = [];
+	measurePanelVisible.value = true;
+	measureActiveTab.value = 'info';
+	showInfoPanel.value = false;
+	activeTopTab.value = 'sy';
+	if (kind === 'markPoint') {
+		selectedMarkPointEntityId.value = String(feature?.getId?.() || '');
+		applyMarkPointDataToPanel(data || {});
+	} else {
+		selectedMarkPointEntityId.value = '';
+		applyMeasureDataToPanel(data || {});
+	}
+	bumpSyInfoListVersion();
+}
+
+function handleOpenLayersDrawingSelect(feature) {
+	if (!feature) return;
+	if (feature._syMarkPointData) {
+		handleOpenLayersDrawingCreate({ kind: 'markPoint', feature, data: feature._syMarkPointData });
+		return;
+	}
+	if (feature._measureData) {
+		handleOpenLayersDrawingCreate({ kind: 'measure', feature, data: feature._measureData });
+	}
+}
+
+function handleOpenLayersQueryComplete({ toolType, geometry }) {
+	const { landPrice } = ensureOpenLayersControllers();
+	const results = landPrice.queryGeometry(toolType, geometry);
+	showDjcxQueryResults(results);
+}
+
+function handleOpenLayersPointQuery(coordinates, options = {}) {
+	const { landPrice } = ensureOpenLayersControllers();
+	const lon = Number(coordinates?.longitude);
+	const lat = Number(coordinates?.latitude);
+	if (!Number.isFinite(lon) || !Number.isFinite(lat)) return;
+	const results = landPrice.queryPoint(lon, lat);
+	if (options.multi) {
+		if (!results.length) return;
+		const pickKey = djcxFeatureKey(results[0]);
+		if (!pickKey) return;
+		const index = djcxMultiSelectedKeys.findIndex((key) => String(key) === pickKey);
+		if (index >= 0) djcxMultiSelectedKeys.splice(index, 1);
+		else djcxMultiSelectedKeys.push(pickKey);
+		const allFeatures = landPrice.getAllFeatures();
+		const selectedFeatures = [];
+		const reps = [];
+		djcxMultiSelectedKeys.forEach((key) => {
+			const matches = allFeatures.filter((feature) => djcxFeatureKey(feature) === String(key));
+			if (!matches.length) return;
+			selectedFeatures.push(...matches);
+			reps.push(matches[0]);
+		});
+		djcxSetHighlights(selectedFeatures);
+		if (reps.length === 1) djcxShowFeatureInPanel(reps[0], 1);
+		else if (reps.length > 1) djcxShowFeaturesInTable(reps, { withLoading: false });
+		else showInfoPanel.value = false;
+		return;
+	}
+	showDjcxQueryResults(results, { withLoading: false });
+}
+
+function showDjcxQueryResults(results, options = {}) {
+	const grouped = djcxGroupEntitiesByFeatureKey(results);
+	const keys = [...grouped.keys()];
+	const allEntities = keys.flatMap((key) => grouped.get(key)?.entities || []);
+	const reps = keys.map((key) => grouped.get(key)?.rep).filter(Boolean);
+	djcxSetHighlights(allEntities);
+	if (keys.length === 1) djcxShowFeatureInPanel(reps[0], 1);
+	else if (keys.length > 1) djcxShowFeaturesInTable(reps, options);
+	else showInfoPanel.value = false;
+}
 
 function normalizeTerrainUrl(url) {
 	return String(url || '').trim();
@@ -1042,6 +1248,10 @@ function djcxSetOutlineHighlightForEntity(entity, enabled) {
 }
 
 function djcxClearHighlights() {
+	if (isOpenLayersEngine.value) {
+		olLandPrice?.clearHighlights?.();
+		return;
+	}
 	for (const ent of djcxHighlightedEntities) {
 		djcxSetOutlineHighlightForEntity(ent, false);
 		djcxApplyEntityStyle(ent, false);
@@ -1050,6 +1260,10 @@ function djcxClearHighlights() {
 }
 
 function djcxSetHighlights(entities) {
+	if (isOpenLayersEngine.value) {
+		ensureOpenLayersControllers().landPrice.setHighlights(entities || []);
+		return;
+	}
 	djcxClearHighlights();
 	(entities || []).forEach((ent) => {
 		djcxApplyEntityStyle(ent, false);
@@ -1228,6 +1442,10 @@ function djcxPickLabelLonLat(entity, allEntities) {
 }
 
 async function djcxAddNodeFeatures(nodeId, records) {
+	if (isOpenLayersEngine.value) {
+		ensureOpenLayersControllers().landPrice.addNodeFeatures(nodeId, records, { visible: activeTopTab.value === 'djcx' });
+		return;
+	}
 	const viewer = getViewer();
 	if (!viewer) return;
 	djcxRemoveNodeFeatures(nodeId);
@@ -1354,6 +1572,11 @@ async function djcxAddNodeFeatures(nodeId, records) {
 }
 
 function djcxRemoveNodeFeatures(nodeId) {
+	if (isOpenLayersEngine.value) {
+		ensureOpenLayersControllers().landPrice.removeNodeFeatures(nodeId);
+		djcxMultiSelectedKeys = [];
+		return;
+	}
 	const viewer = getViewer();
 	if (!viewer) return;
 	djcxClearHighlights();
@@ -1410,6 +1633,9 @@ function djcxEntityCentroidLonLat(entity) {
 }
 
 function djcxGetAllFeatureEntities() {
+	if (isOpenLayersEngine.value) {
+		return ensureOpenLayersControllers().landPrice.getAllFeatures();
+	}
 	const out = [];
 	for (const ds of djcxNodeDataSources.values()) {
 		for (const ent of ds.entities.values) {
@@ -1420,6 +1646,10 @@ function djcxGetAllFeatureEntities() {
 }
 
 function setDjcxDataSourcesVisible(visible) {
+	if (isOpenLayersEngine.value) {
+		ensureOpenLayersControllers().landPrice.setVisible(visible);
+		return;
+	}
 	for (const ds of djcxNodeDataSources.values()) {
 		if (ds) ds.show = visible;
 	}
@@ -1427,7 +1657,7 @@ function setDjcxDataSourcesVisible(visible) {
 
 function djcxFeatureKey(entity) {
 	const p = entity?._djcxProperties || {};
-	const key = p.id ?? p.fid ?? p.DKBH ?? p.OBJECTID ?? entity?.id;
+	const key = p.id ?? p.fid ?? p.DKBH ?? p.OBJECTID ?? entity?.id ?? entity?.getId?.();
 	return String(key ?? '');
 }
 
@@ -1734,13 +1964,48 @@ const updateIndicator = () => {
 const HOME_SIDEBAR_COLLAPSE_MS = 360;
 const HOME_ENTER_CAMERA_SECONDS = 1.6;
 const MODULE_APPEAR_MS = 360;
+const OPENLAYERS_HOME_EARTH_TRANSITION_MS = 760;
 const homeSidebarCollapsing = ref(false);
 const homeSidebarEntering = ref(false);
 const homeUiVisible = ref(true);
 const moduleEnterKey = ref(null);
+const openLayersHomeEarthVisible = ref(props.mapEngine === 'openlayers');
+const openLayersHomeEarthLeaving = ref(false);
 let moduleEnterTimer = null;
+let openLayersHomeEarthTimer = null;
 let tabSwitchToken = 0;
 const waitMs = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+function clearOpenLayersHomeEarthTimer() {
+	if (openLayersHomeEarthTimer) {
+		window.clearTimeout(openLayersHomeEarthTimer);
+		openLayersHomeEarthTimer = null;
+	}
+}
+
+function showOpenLayersHomeEarth() {
+	if (!isOpenLayersEngine.value) return;
+	clearOpenLayersHomeEarthTimer();
+	openLayersHomeEarthVisible.value = true;
+	openLayersHomeEarthLeaving.value = false;
+}
+
+function hideOpenLayersHomeEarth() {
+	clearOpenLayersHomeEarthTimer();
+	openLayersHomeEarthVisible.value = false;
+	openLayersHomeEarthLeaving.value = false;
+}
+
+function startOpenLayersHomeEarthTransition() {
+	if (!isOpenLayersEngine.value) return HOME_SIDEBAR_COLLAPSE_MS;
+	clearOpenLayersHomeEarthTimer();
+	openLayersHomeEarthVisible.value = true;
+	openLayersHomeEarthLeaving.value = true;
+	openLayersHomeEarthTimer = window.setTimeout(() => {
+		hideOpenLayersHomeEarth();
+	}, OPENLAYERS_HOME_EARTH_TRANSITION_MS);
+	return OPENLAYERS_HOME_EARTH_TRANSITION_MS;
+}
 
 function triggerModuleEnter(nextKey) {
 	if (!nextKey || nextKey === 'home') return;
@@ -1758,8 +2023,14 @@ async function requestTopTabChange(nextKey) {
 	if (activeTopTab.value === 'home' && nextKey !== 'home') {
 		const token = ++tabSwitchToken;
 		homeSidebarCollapsing.value = true;
-		flyToOnLeaveHome();
-		await waitMs(HOME_SIDEBAR_COLLAPSE_MS);
+		let transitionWaitMs = HOME_SIDEBAR_COLLAPSE_MS;
+		if (isOpenLayersEngine.value) {
+			transitionWaitMs = startOpenLayersHomeEarthTransition();
+			animateOpenLayersTo(undefined, 13, transitionWaitMs);
+		} else {
+			flyToOnLeaveHome();
+		}
+		await waitMs(transitionWaitMs);
 		if (token !== tabSwitchToken) return;
 		homeSidebarCollapsing.value = false;
 		homeUiVisible.value = false;
@@ -1776,7 +2047,13 @@ async function requestTopTabChange(nextKey) {
 		homeSidebarCollapsing.value = false;
 		homeSidebarEntering.value = true;
 		await waitMs(0);
-		await enterHomeScene({ duration: HOME_ENTER_CAMERA_SECONDS });
+		if (isOpenLayersEngine.value) {
+			showOpenLayersHomeEarth();
+			animateOpenLayersTo(undefined, 12, HOME_ENTER_CAMERA_SECONDS * 1000);
+			await waitMs(Math.min(HOME_ENTER_CAMERA_SECONDS * 1000, 360));
+		} else {
+			await enterHomeScene({ duration: HOME_ENTER_CAMERA_SECONDS, startRotation: props.homeActive });
+		}
 		if (token !== tabSwitchToken) return;
 		window.requestAnimationFrame(() => {
 			if (token !== tabSwitchToken) return;
@@ -1796,13 +2073,31 @@ const enterModule = (tabKey) => {
 	}
 };
 
+watch(() => props.homeActive, async (active) => {
+	if (isOpenLayersEngine.value) return;
+	if (!active) {
+		stopHomeEarthRotation();
+		return;
+	}
+	if (activeTopTab.value === 'home') {
+		await enterHomeScene({ duration: 0, startRotation: true });
+	}
+});
+
 watch(activeTopTab, async (newVal) => {
 	const viewer = getViewer();
 	if (newVal === 'home') {
 		layerPanelVisible.value = false;
 	}
-	if (newVal !== 'home') {
+	if (newVal !== 'home' && !isOpenLayersEngine.value) {
 		stopHomeEarthRotation();
+	}
+	if (isOpenLayersEngine.value) {
+		if (newVal === 'home') {
+			showOpenLayersHomeEarth();
+		} else if (!openLayersHomeEarthLeaving.value) {
+			hideOpenLayersHomeEarth();
+		}
 	}
 	if (newVal === 'djcx') {
 		djcxGongneng.value = true;
@@ -1815,19 +2110,31 @@ watch(activeTopTab, async (newVal) => {
 
 	// 切换页面时，如果不是首页，则关闭测量工具并隐藏已有的测量实体
 	if (newVal !== 'sy') {
-		if (currentMeasureEntity) {
-			setEntityHighlight(currentMeasureEntity, false);
+		if (isOpenLayersEngine.value) {
+			olDrawing?.clearSelection?.();
 			currentMeasureEntity = null;
-		}
-		if (viewer && selectedMarkPointEntityId.value) {
-			const selected = viewer.entities.getById(selectedMarkPointEntityId.value);
-			if (selected) setEntityHighlight(selected, false);
+			currentMeasurePoints = [];
 			selectedMarkPointEntityId.value = '';
+		} else {
+			if (currentMeasureEntity) {
+				setEntityHighlight(currentMeasureEntity, false);
+				currentMeasureEntity = null;
+			}
+			if (viewer && selectedMarkPointEntityId.value) {
+				const selected = viewer.entities.getById(selectedMarkPointEntityId.value);
+				if (selected) setEntityHighlight(selected, false);
+				selectedMarkPointEntityId.value = '';
+			}
 		}
 		selectedTerrainItemKey.value = '';
 		resetDrawing();
 		measurePanelVisible.value = false;
-		if (viewer) {
+		if (isOpenLayersEngine.value) {
+			olDrawing?.getItems?.().forEach((item) => {
+				const feature = item.feature || item.entity;
+				if (feature) feature.set('visible', false);
+			});
+		} else if (viewer) {
 			[...viewer.entities.values].forEach(ent => {
 				if (ent._measureData || ent._drawn || ent.name === 'measure-label') {
 					applyMeasureEntityVisibility(ent, false);
@@ -1839,7 +2146,12 @@ watch(activeTopTab, async (newVal) => {
 		}
 	} else {
 		// 切回首页，显示所有测量实体
-		if (viewer) {
+		if (isOpenLayersEngine.value) {
+			olDrawing?.getItems?.().forEach((item) => {
+				const feature = item.feature || item.entity;
+				if (feature) feature.set('visible', feature._syUserVisible !== false);
+			});
+		} else if (viewer) {
 			[...viewer.entities.values].forEach(ent => {
 				if (ent._measureData || ent._drawn || ent.name === 'measure-label') {
 					applyMeasureEntityVisibility(ent, ent._syUserVisible !== false);
@@ -1862,6 +2174,20 @@ watch(activeTopTab, async (newVal) => {
 watch(
 	() => [measureForm.name, measureForm.unit, measureForm.desc, measureForm.heightMeters, measureForm.longitude, measureForm.latitude, measureForm.elevationMeters, measureForm.kind],
 	() => {
+		if (isOpenLayersEngine.value) {
+			if (!currentMeasureEntity) return;
+			const areaSqMeters = Number(measureForm.areaSqMeters) || 0;
+			const heightMeters = Number(measureForm.heightMeters) || 0;
+			measureForm.volumeCubicMeters = areaSqMeters > 0 && heightMeters > 0 ? areaSqMeters * heightMeters : 0;
+			olDrawing?.updateFeatureDataFromPanel?.(currentMeasureEntity, {
+				...measureForm,
+				points: [...lastMeasure.points],
+				segmentsMeters: [...lastMeasure.segmentsMeters],
+				cumulativeMeters: [...lastMeasure.cumulativeMeters],
+			});
+			bumpSyInfoListVersion();
+			return;
+		}
 		if (measureForm.kind === 'markPoint') {
 			const viewer = getViewer();
 			const id = selectedMarkPointEntityId.value;
@@ -2860,6 +3186,28 @@ function styleImportedShpDataSource(dataSource, itemKey, featureMetas = []) {
 }
 
 async function confirmShpImport(payload) {
+	if (isOpenLayersEngine.value) {
+		try {
+			const { imports, drawing } = ensureOpenLayersControllers();
+			const result = await imports.addShp(payload);
+			drawing.clearSelection();
+			currentMeasureEntity = null;
+			currentMeasurePoints = [];
+			selectedMarkPointEntityId.value = '';
+			selectedTerrainItemKey.value = '';
+			selectedKmlItemKey.value = '';
+			selectedCadItemKey.value = '';
+			selectedShpItemKey.value = result.key;
+			measurePanelVisible.value = false;
+			activeTopTab.value = 'sy';
+			bumpSyInfoListVersion();
+			ElMessage.success({ message: `SHP 已添加到地图，共 ${result.count} 个要素`, offset: MESSAGE_OFFSET_TOP });
+		} catch (error) {
+			console.error('Failed to add local SHP GeoJSON to OpenLayers:', error);
+			ElMessage.error({ message: error?.message || 'SHP 添加到地图失败，请检查解析结果', offset: MESSAGE_OFFSET_TOP });
+		}
+		return;
+	}
 	const viewer = getViewer();
 	if (!viewer) return;
 	const name = String(payload?.name || '').trim() || `本地shapefile-${shpImportItems.value.length + 1}`;
@@ -2925,6 +3273,29 @@ async function confirmShpImport(payload) {
 }
 
 async function confirmKmlImport(payload) {
+	if (isOpenLayersEngine.value) {
+		try {
+			const { imports, drawing } = ensureOpenLayersControllers();
+			const result = await imports.addKml(payload);
+			drawing.clearSelection();
+			currentMeasureEntity = null;
+			currentMeasurePoints = [];
+			selectedMarkPointEntityId.value = '';
+			selectedTerrainItemKey.value = '';
+			selectedShpItemKey.value = '';
+			selectedCadItemKey.value = '';
+			closeShpFeaturePopup();
+			selectedKmlItemKey.value = result.key;
+			measurePanelVisible.value = false;
+			activeTopTab.value = 'sy';
+			bumpSyInfoListVersion();
+			ElMessage.success({ message: 'KML/KMZ 已添加到地图', offset: MESSAGE_OFFSET_TOP });
+		} catch (error) {
+			console.error('Failed to add local KML/KMZ to OpenLayers:', error);
+			ElMessage.error({ message: error?.message || 'KML/KMZ 添加到地图失败，请检查文件是否有效', offset: MESSAGE_OFFSET_TOP });
+		}
+		return;
+	}
 	const viewer = getViewer();
 	if (!viewer) return;
 	const file = payload?.file;
@@ -2985,6 +3356,29 @@ async function confirmKmlImport(payload) {
 }
 
 async function confirmCadImport(payload) {
+	if (isOpenLayersEngine.value) {
+		try {
+			const { imports, drawing } = ensureOpenLayersControllers();
+			const result = imports.addCad(payload);
+			drawing.clearSelection();
+			currentMeasureEntity = null;
+			currentMeasurePoints = [];
+			selectedMarkPointEntityId.value = '';
+			selectedTerrainItemKey.value = '';
+			selectedShpItemKey.value = '';
+			selectedKmlItemKey.value = '';
+			closeShpFeaturePopup();
+			selectedCadItemKey.value = result.key;
+			measurePanelVisible.value = false;
+			activeTopTab.value = 'sy';
+			bumpSyInfoListVersion();
+			ElMessage.success({ message: `CAD 已添加到地图，已绘制 ${result.count} 个实体`, offset: MESSAGE_OFFSET_TOP });
+		} catch (error) {
+			console.error('Failed to add DXF to OpenLayers:', error);
+			ElMessage.error({ message: error?.message || 'CAD 添加到地图失败，请检查 DXF 文件内容', offset: MESSAGE_OFFSET_TOP });
+		}
+		return;
+	}
 	const viewer = getViewer();
 	if (!viewer) return;
 	const dxf = payload?.dxf;
@@ -3046,6 +3440,13 @@ async function confirmCadImport(payload) {
 
 const syInfoItems = computed(() => {
 	syInfoListVersion.value;
+	if (isOpenLayersEngine.value) {
+		const { drawing, imports } = ensureOpenLayersControllers();
+		return [
+			...drawing.getItems(),
+			...imports.getItems(),
+		];
+	}
 	const viewer = getViewer();
 	const terrainItems = [];
 	if (terrainNetworkVisible.value || terrainModelItems.value.length) {
@@ -3155,6 +3556,19 @@ const syInfoItems = computed(() => {
 });
 
 function resetDrawing() {
+	if (isOpenLayersEngine.value) {
+		ensureOpenLayersControllers();
+		if (djcxLoadingTimer) { clearTimeout(djcxLoadingTimer); djcxLoadingTimer = null; }
+		djcxLoadingToken += 1;
+		djcxLoading.value = false;
+		djcxMultiSelectedKeys = [];
+		olLandPrice?.clearHighlights?.();
+		olDrawing?.stopInteraction?.();
+		olDrawing?.clearQueries?.();
+		activeTool.value = null;
+		drawingHint.value = '';
+		return;
+	}
 	const viewer = getViewer();
 	if (!viewer) return;
 	
@@ -3190,6 +3604,32 @@ function startTool(type) {
 		aiChatMaximized.value = true;
 		activeTool.value = 'ai';
 		nextTick(() => scrollAiBottom());
+		return;
+	}
+
+	if (isOpenLayersEngine.value) {
+		if (activeTool.value === type) {
+			activeTool.value = null;
+			resetDrawing();
+			return;
+		}
+		const { drawing } = ensureOpenLayersControllers();
+		resetDrawing();
+		activeTool.value = type;
+		if (type === 'dianxuan' || type === 'duodian') {
+			djcxMultiSelectedKeys = [];
+			drawingHint.value = type === 'duodian' ? '点击地图选择多个要素' : '点击地图查询要素';
+			return;
+		}
+		if (OPENLAYERS_DRAW_TOOLS.has(type)) {
+			const started = drawing.startTool(type);
+			if (!started) {
+				activeTool.value = null;
+				ElMessage.warning({ message: '当前地图尚未就绪，请稍后再试', offset: MESSAGE_OFFSET_TOP });
+			}
+			return;
+		}
+		activeTool.value = null;
 		return;
 	}
 
@@ -3741,6 +4181,32 @@ function downloadTextFile(content, fileName, mimeType = 'application/vnd.google-
 }
 
 function exportCurrentKml() {
+	if (isOpenLayersEngine.value) {
+		const feature = currentMeasureEntity;
+		const data = feature?._syMarkPointData || feature?._measureData || {};
+		const name = String(measureForm.name || data.name || '').trim();
+		const description = String(measureForm.desc || data.desc || '').trim();
+		if (!feature) {
+			ElMessage.warning({ message: '请先选中一个测绘对象后再导出 KML', offset: MESSAGE_OFFSET_TOP });
+			return;
+		}
+		const placemark = buildOpenLayersKmlPlacemark(feature, name, description);
+		if (!placemark) {
+			ElMessage.warning({ message: '当前对象暂不支持导出为 KML', offset: MESSAGE_OFFSET_TOP });
+			return;
+		}
+		const docName = escapeXml(name || '测绘对象');
+		const kmlText = `${KML_XML_HEADER}
+<kml xmlns="http://www.opengis.net/kml/2.2">
+	<Document>
+		<name>${docName}</name>${placemark}
+	</Document>
+</kml>`;
+		const fileName = `${safeMapFileName(name || '测绘对象', '测绘对象')}.kml`;
+		downloadTextFile(kmlText, fileName);
+		ElMessage.success({ message: `KML 已导出：${fileName}`, offset: MESSAGE_OFFSET_TOP });
+		return;
+	}
 	const viewer = getViewer();
 	let entity = currentMeasureEntity;
 	let name = String(measureForm.name || '').trim();
@@ -4635,6 +5101,13 @@ function finalizeDrawing() {
 
 // 其他逻辑：定位、图层、AI
 async function locateToMe() {
+	if (isOpenLayersEngine.value) {
+		navigator.geolocation.getCurrentPosition(pos => {
+			const { latitude: lat, longitude: lon } = pos.coords;
+			animateOpenLayersTo([lon, lat], 16, 900);
+		});
+		return;
+	}
 	const viewer = getViewer();
 	if (!viewer) return;
 	navigator.geolocation.getCurrentPosition(pos => {
@@ -4645,6 +5118,16 @@ async function locateToMe() {
 }
 function setBaseLayer(name) {
 	baseLayerActive.value = name;
+	if (isOpenLayersEngine.value) {
+		const layerMap = {
+			全球影像: 'osm',
+			天地图: 'tdt-img',
+			矢量图: 'tdt-vector',
+			注记图: 'tdt-img-label',
+		};
+		setOpenLayersBaseLayer(layerMap[name] || 'tdt-img');
+		return;
+	}
 	if (name === '全球影像') {
 		showGlobalImageryLayer();
 		removeImgLayer();
@@ -5003,12 +5486,43 @@ const aiDragStart = ref({});
 // 监听地球瓦片加载完成
 function watchGlobeReady() {
 	const viewer = getViewer();
-	if (!viewer) return;
+	if (!viewer) return () => {};
 
 	let readyEmitted = false;
+	let postRenderAttached = false;
+	let initialTimer = null;
+	let timeoutTimer = null;
+
+	const isViewerAlive = () => viewer && !(typeof viewer.isDestroyed === 'function' && viewer.isDestroyed());
+	const clearReadyTimers = () => {
+		if (initialTimer) {
+			window.clearTimeout(initialTimer);
+			initialTimer = null;
+		}
+		if (timeoutTimer) {
+			window.clearTimeout(timeoutTimer);
+			timeoutTimer = null;
+		}
+	};
+	const removePostRenderHandler = () => {
+		if (!postRenderAttached || !isViewerAlive()) {
+			postRenderAttached = false;
+			return;
+		}
+		viewer.scene.postRender.removeEventListener(postRenderHandler);
+		postRenderAttached = false;
+	};
+	const emitReady = (message) => {
+		if (readyEmitted) return;
+		readyEmitted = true;
+		clearReadyTimers();
+		removePostRenderHandler();
+		emit('ready');
+		console.log(message);
+	};
 
 	const checkReady = () => {
-		if (readyEmitted) return;
+		if (readyEmitted || !isViewerAlive()) return;
 
 		const scene = viewer.scene;
 		const globe = scene.globe;
@@ -5039,9 +5553,7 @@ function watchGlobeReady() {
 		}
 
 		if (allLoaded) {
-			readyEmitted = true;
-			emit('ready');
-			console.log('[CesiumMap] Globe ready, emitting ready event');
+			emitReady('[CesiumMap] Globe ready, emitting ready event');
 		}
 	};
 
@@ -5051,56 +5563,74 @@ function watchGlobeReady() {
 	};
 
 	// 初始延迟检查（等待图层初始化）
-	setTimeout(() => {
+	initialTimer = window.setTimeout(() => {
+		initialTimer = null;
 		checkReady();
-		if (!readyEmitted) {
+		if (!readyEmitted && isViewerAlive()) {
 			viewer.scene.postRender.addEventListener(postRenderHandler);
+			postRenderAttached = true;
 		}
 	}, 500);
 
 	// 超时保护：10秒后强制触发
-	setTimeout(() => {
-		if (!readyEmitted) {
-			readyEmitted = true;
-			emit('ready');
-			console.log('[CesiumMap] Globe ready timeout, force emitting ready event');
-		}
-		viewer.scene.postRender.removeEventListener(postRenderHandler);
+	timeoutTimer = window.setTimeout(() => {
+		timeoutTimer = null;
+		emitReady('[CesiumMap] Globe ready timeout, force emitting ready event');
 	}, 10000);
+
+	return () => {
+		readyEmitted = true;
+		clearReadyTimers();
+		removePostRenderHandler();
+	};
 }
 
 onMounted(async () => {
 	// 加载地价查询图层
 	// list.value = await getLandPriceLayers();
 
-	initCesium(props.renderPreset);
-	homeUiVisible.value = true;
-	homeSidebarEntering.value = false;
-	await enterHomeScene({ duration: 0 });
+	if (isOpenLayersEngine.value) {
+		initOpenLayers();
+		ensureOpenLayersControllers();
+		homeUiVisible.value = true;
+		homeSidebarEntering.value = false;
+		showOpenLayersHomeEarth();
+		await nextTick();
+		addOpenLayersClickHandler(handleMapClick, { hitTolerance: 5 });
+		addOpenLayersMouseMoveHandler(coords => mouseCoords.value = coords);
+		addOpenLayersHeadingUpdateHandler(deg => headingDeg.value = deg);
+		addOpenLayersScaleUpdateHandler(info => { if (info) Object.assign(scaleBar, info); });
+		window.requestAnimationFrame(() => emit('ready'));
+	} else {
+		initCesium(props.renderPreset);
+		homeUiVisible.value = true;
+		homeSidebarEntering.value = false;
+		await enterHomeScene({ duration: 0, startRotation: props.homeActive });
 
-	// 监听地球瓦片加载完成
-	watchGlobeReady();
+		// 监听地球瓦片加载完成
+		globeReadyCleanup = watchGlobeReady();
 
-	addClickHandler(handleMapClick, {
-		shouldHandle: (payload) => {
-			if (payload?.type === 'entity' && payload?.entity?._measureData) return true;
-			if (payload?.type === 'entity' && payload?.entity?._syShpItemKey) {
-				return activeTopTab.value === 'sy' && !['drawLine', 'drawPolygon', 'drawCircle', 'drawRect', 'measureDistance', 'measureArea', 'measureVolume', 'measureAzimuth', 'measureAngle'].includes(activeTool.value);
+		addClickHandler(handleMapClick, {
+			shouldHandle: (payload) => {
+				if (payload?.type === 'entity' && payload?.entity?._measureData) return true;
+				if (payload?.type === 'entity' && payload?.entity?._syShpItemKey) {
+					return activeTopTab.value === 'sy' && !['drawLine', 'drawPolygon', 'drawCircle', 'drawRect', 'measureDistance', 'measureArea', 'measureVolume', 'measureAzimuth', 'measureAngle'].includes(activeTool.value);
+				}
+				if (payload?.type === 'entity' && payload?.entity?._syCadItemKey) {
+					return activeTopTab.value === 'sy' && !['drawLine', 'drawPolygon', 'drawCircle', 'drawRect', 'measureDistance', 'measureArea', 'measureVolume', 'measureAzimuth', 'measureAngle'].includes(activeTool.value);
+				}
+				return activeTool.value === 'dianxuan';
 			}
-			if (payload?.type === 'entity' && payload?.entity?._syCadItemKey) {
-				return activeTopTab.value === 'sy' && !['drawLine', 'drawPolygon', 'drawCircle', 'drawRect', 'measureDistance', 'measureArea', 'measureVolume', 'measureAzimuth', 'measureAngle'].includes(activeTool.value);
-			}
-			return activeTool.value === 'dianxuan';
-		}
-	});
-	addMouseMoveHandler(coords => mouseCoords.value = coords);
-	addHeadingUpdateHandler(deg => headingDeg.value = deg);
-	addScaleUpdateHandler(info => { if (info) Object.assign(scaleBar, info); });
-	if (showPerformanceMonitor) {
-		unsubscribePerformanceStats = subscribePerformanceStats((stats) => {
-			Object.assign(performanceMonitor, stats);
-			pushPerformanceFpsSample(stats?.fps);
 		});
+		addMouseMoveHandler(coords => mouseCoords.value = coords);
+		addHeadingUpdateHandler(deg => headingDeg.value = deg);
+		addScaleUpdateHandler(info => { if (info) Object.assign(scaleBar, info); });
+		if (showPerformanceMonitor) {
+			unsubscribePerformanceStats = subscribePerformanceStats((stats) => {
+				Object.assign(performanceMonitor, stats);
+				pushPerformanceFpsSample(stats?.fps);
+			});
+		}
 	}
 	document.addEventListener('click', e => {
 		if (layerPanelVisible.value && !layerPanelRef.value?.contains(e.target) && !layerBtnRef.value?.contains(e.target)) layerPanelVisible.value = false;
@@ -5114,13 +5644,31 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
 	killAiChatTimeline();
+	if (typeof globeReadyCleanup === 'function') {
+		globeReadyCleanup();
+		globeReadyCleanup = null;
+	}
+	clearOpenLayersHomeEarthTimer();
 	onAiDragEnd();
 	if (typeof unsubscribePerformanceStats === 'function') {
 		unsubscribePerformanceStats();
 		unsubscribePerformanceStats = null;
 	}
 	onPerformanceMonitorPointerUp();
-	removeClickHandler(); removeMouseMoveHandler(); removeHeadingUpdateHandler(); removeScaleUpdateHandler();
+	if (isOpenLayersEngine.value) {
+		olDrawing?.destroy?.();
+		olImports?.clearAll?.();
+		olLandPrice?.clearAll?.();
+		removeOpenLayersClickHandler();
+		removeOpenLayersMouseMoveHandler();
+		removeOpenLayersHeadingUpdateHandler();
+		removeOpenLayersScaleUpdateHandler();
+	} else {
+		removeClickHandler();
+		removeMouseMoveHandler();
+		removeHeadingUpdateHandler();
+		removeScaleUpdateHandler();
+	}
 	window.removeEventListener('resize', clampPerformanceMonitorPosition);
 	window.removeEventListener('resize', onShpFeaturePopupResize);
 	window.removeEventListener('pointermove', onShpFeatureHeaderPointerMove);
@@ -5128,7 +5676,11 @@ onBeforeUnmount(() => {
 	window.removeEventListener('pointermove', onShpFeatureFloatPointerMove);
 	window.removeEventListener('pointerup', onShpFeatureFloatPointerUp);
 	clearAllInspectionOverlays();
-	destroyCesium();
+	if (isOpenLayersEngine.value) {
+		destroyOpenLayers();
+	} else {
+		destroyCesium();
+	}
 });
 
 function confirmLogout() {
@@ -5154,6 +5706,10 @@ async function openAiAssistantFromHeader() {
 }
 
 function openTerrainPanel() {
+	if (isOpenLayersEngine.value) {
+		ElMessage.warning({ message: '轻量版不支持三维地形，请在加载页选择 Cesium 高性能版。', offset: MESSAGE_OFFSET_TOP });
+		return;
+	}
 	terrainInputUrl.value = localStorage.getItem(TERRAIN_INPUT_STORAGE_KEY) || terrainInputUrl.value;
 	terrainInputName.value = localStorage.getItem(TERRAIN_NAME_STORAGE_KEY) || terrainInputName.value;
 	terrainPanelVisible.value = true;
@@ -5164,6 +5720,11 @@ function cancelTerrainPanel() {
 }
 
 async function confirmTerrain() {
+	if (isOpenLayersEngine.value) {
+		ElMessage.warning({ message: '轻量版不支持三维地形，请在加载页选择 Cesium 高性能版。', offset: MESSAGE_OFFSET_TOP });
+		terrainPanelVisible.value = false;
+		return;
+	}
 	const input = terrainInputUrl.value.trim();
 	const previousTerrainModelList = [...terrainModelItems.value];
 	const previousTerrainNameMap = new Map(previousTerrainModelList.map((item) => [item.url, item.name]));
@@ -5260,6 +5821,14 @@ async function confirmTerrain() {
 }
 
 function closeTerrain() {
+	if (isOpenLayersEngine.value) {
+		terrainNetworkVisible.value = false;
+		selectedTerrainItemKey.value = '';
+		updateTerrainActiveState();
+		terrainPanelVisible.value = false;
+		bumpSyInfoListVersion();
+		return;
+	}
 	disableTerrain();
 	terrainNetworkVisible.value = false;
 	selectedTerrainItemKey.value = '';
@@ -5277,6 +5846,48 @@ function closeTerrain() {
 
 // 处理地图点击
 function handleMapClick(info) {
+	if (isOpenLayersEngine.value) {
+		ensureOpenLayersControllers();
+		const feature = info?.feature || info?.entity || null;
+		if (activeTopTab.value === 'djcx' && activeTool.value === 'dianxuan' && info?.coordinates) {
+			handleOpenLayersPointQuery(info.coordinates);
+			return;
+		}
+		if (activeTopTab.value === 'djcx' && activeTool.value === 'duodian' && info?.coordinates) {
+			handleOpenLayersPointQuery(info.coordinates, { multi: true });
+			return;
+		}
+		if (feature?._djcxFeature && activeTopTab.value === 'djcx') {
+			djcxSetHighlights([feature]);
+			djcxShowFeatureInPanel(feature, 1);
+			return;
+		}
+		if (activeTool.value && OPENLAYERS_DRAW_TOOLS.has(activeTool.value)) return;
+		if (feature && olDrawing?.handlePickedFeature?.(feature)) {
+			closeShpFeaturePopup();
+			return;
+		}
+		if (feature && olImports?.selectFeature?.(feature)) {
+			olDrawing?.clearSelection?.();
+			currentMeasureEntity = null;
+			currentMeasurePoints = [];
+			selectedMarkPointEntityId.value = '';
+			selectedTerrainItemKey.value = '';
+			selectedShpItemKey.value = feature._syShpItemKey || '';
+			selectedKmlItemKey.value = feature._syKmlItemKey || '';
+			selectedCadItemKey.value = feature._syCadItemKey || '';
+			measurePanelVisible.value = false;
+			activeTopTab.value = 'sy';
+			bumpSyInfoListVersion();
+			return;
+		}
+		clearOpenLayersSelectionState();
+		measurePanelVisible.value = false;
+		Object.assign(measureForm, { ...DEFAULT_MEASURE_FORM });
+		closeShpFeaturePopup();
+		bumpSyInfoListVersion();
+		return;
+	}
 	// 如果点击的是测量实体
 	if (info?.entity?._measureData) {
 		selectSyInfoItem({ kind: 'measure', entity: info.entity }, { locate: false });
@@ -5423,6 +6034,32 @@ function copyAll() { navigator.clipboard.writeText(lastMeasure.points.map((p, i)
 
 function toggleSyInfoItem({ item, checked }) {
 	if (!item) return;
+	if (isOpenLayersEngine.value) {
+		const { drawing, imports } = ensureOpenLayersControllers();
+		if (item.kind === 'measure' || item.kind === 'markPoint') {
+			drawing.setFeatureVisible(item.feature || item.entity, checked);
+			if (!checked && currentMeasureEntity === (item.feature || item.entity)) {
+				currentMeasureEntity = null;
+				currentMeasurePoints = [];
+				selectedMarkPointEntityId.value = '';
+				measurePanelVisible.value = false;
+			}
+			bumpSyInfoListVersion();
+			return;
+		}
+		if (['shp', 'kml', 'cad'].includes(item.kind)) {
+			imports.setVisible(item.key, checked);
+			if (!checked) {
+				if (selectedShpItemKey.value === item.key) selectedShpItemKey.value = '';
+				if (selectedKmlItemKey.value === item.key) selectedKmlItemKey.value = '';
+				if (selectedCadItemKey.value === item.key) selectedCadItemKey.value = '';
+				closeShpFeaturePopup();
+			}
+			bumpSyInfoListVersion();
+			return;
+		}
+		return;
+	}
 	const viewer = getViewer();
 	if (item.kind === 'measure') {
 		selectedTerrainItemKey.value = '';
@@ -5850,6 +6487,54 @@ function handleInspectionTrackHide() {
 
 function selectSyInfoItem(item, options = {}) {
 	if (!item) return;
+	if (isOpenLayersEngine.value) {
+		const { drawing, imports } = ensureOpenLayersControllers();
+		const { locate = true } = options;
+		if ((item.kind === 'measure' || item.kind === 'markPoint') && (item.feature || item.entity)) {
+			const feature = item.feature || item.entity;
+			imports.clearSelection();
+			closeShpFeaturePopup();
+			if (feature._syUserVisible === false) drawing.setFeatureVisible(feature, true);
+			drawing.selectFeature(feature);
+			currentMeasureEntity = feature;
+			currentMeasurePoints = [];
+			selectedTerrainItemKey.value = '';
+			selectedShpItemKey.value = '';
+			selectedKmlItemKey.value = '';
+			selectedCadItemKey.value = '';
+			selectedMarkPointEntityId.value = feature._syMarkPointData ? String(feature.getId?.() || '') : '';
+			measurePanelVisible.value = true;
+			measureActiveTab.value = 'info';
+			activeTopTab.value = 'sy';
+			if (feature._syMarkPointData) applyMarkPointDataToPanel(feature._syMarkPointData);
+			else applyMeasureDataToPanel(feature._measureData || {});
+			if (locate) drawing.fitFeature(feature);
+			bumpSyInfoListVersion();
+			return;
+		}
+		if (['shp', 'kml', 'cad'].includes(item.kind)) {
+			drawing.clearSelection();
+			currentMeasureEntity = null;
+			currentMeasurePoints = [];
+			selectedMarkPointEntityId.value = '';
+			measurePanelVisible.value = false;
+			imports.selectItem(item.key, { locate });
+			selectedTerrainItemKey.value = '';
+			selectedShpItemKey.value = item.kind === 'shp' ? item.key : '';
+			selectedKmlItemKey.value = item.kind === 'kml' ? item.key : '';
+			selectedCadItemKey.value = item.kind === 'cad' ? item.key : '';
+			if (item.kind === 'shp') {
+				const preview = imports.getFeatures(item.key).find((feature) => feature?._syShpFeatureMeta);
+				if (preview?._syShpFeatureMeta) openShpFeaturePopup(preview._syShpFeatureMeta);
+			} else {
+				closeShpFeaturePopup();
+			}
+			activeTopTab.value = 'sy';
+			bumpSyInfoListVersion();
+			return;
+		}
+		return;
+	}
 	const viewer = getViewer();
 	const { locate = true, preservePitch = true } = options;
 	if (item.kind === 'measure' && item.entity?._measureData) {
@@ -6072,6 +6757,32 @@ function deleteCadImportItem(key) {
 
 function deleteSyInfoItem(item) {
 	if (!item) return;
+	if (isOpenLayersEngine.value) {
+		const { drawing, imports } = ensureOpenLayersControllers();
+		if (item.kind === 'measure' || item.kind === 'markPoint') {
+			const feature = item.feature || item.entity;
+			drawing.deleteFeature(feature);
+			if (currentMeasureEntity === feature) {
+				currentMeasureEntity = null;
+				currentMeasurePoints = [];
+				selectedMarkPointEntityId.value = '';
+				measurePanelVisible.value = false;
+				Object.assign(measureForm, { ...DEFAULT_MEASURE_FORM });
+			}
+			bumpSyInfoListVersion();
+			return;
+		}
+		if (['shp', 'kml', 'cad'].includes(item.kind)) {
+			imports.deleteItem(item.key);
+			if (selectedShpItemKey.value === item.key) selectedShpItemKey.value = '';
+			if (selectedKmlItemKey.value === item.key) selectedKmlItemKey.value = '';
+			if (selectedCadItemKey.value === item.key) selectedCadItemKey.value = '';
+			closeShpFeaturePopup();
+			bumpSyInfoListVersion();
+			return;
+		}
+		return;
+	}
 	if (item.kind === 'measure') {
 		deleteMeasureEntity(item.entity);
 		return;
@@ -6106,6 +6817,18 @@ function deleteSyInfoItem(item) {
 }
 
 async function deleteCurrentMeasure() {
+	if (isOpenLayersEngine.value) {
+		if (currentMeasureEntity) {
+			ensureOpenLayersControllers().drawing.deleteFeature(currentMeasureEntity);
+			currentMeasureEntity = null;
+			currentMeasurePoints = [];
+			selectedMarkPointEntityId.value = '';
+			measurePanelVisible.value = false;
+			Object.assign(measureForm, { ...DEFAULT_MEASURE_FORM });
+			bumpSyInfoListVersion();
+		}
+		return;
+	}
 	if (measureForm.kind === 'markPoint' && selectedMarkPointEntityId.value) {
 		const viewer = getViewer();
 		const entity = viewer?.entities.getById(selectedMarkPointEntityId.value);
@@ -6117,6 +6840,23 @@ async function deleteCurrentMeasure() {
 	}
 }
 async function clearAllMeasures() {
+	if (isOpenLayersEngine.value) {
+		resetDrawing();
+		const { drawing, imports } = ensureOpenLayersControllers();
+		drawing.clearAll();
+		imports.clearAll();
+		currentMeasureEntity = null;
+		currentMeasurePoints = [];
+		selectedMarkPointEntityId.value = '';
+		measurePanelVisible.value = false;
+		Object.assign(measureForm, { ...DEFAULT_MEASURE_FORM });
+		selectedShpItemKey.value = '';
+		selectedKmlItemKey.value = '';
+		selectedCadItemKey.value = '';
+		closeShpFeaturePopup();
+		bumpSyInfoListVersion();
+		return;
+	}
 	resetDrawing();
 	const viewer = getViewer();
 	if (selectedMarkPointEntityId.value) {
@@ -6169,6 +6909,68 @@ async function clearAllMeasures() {
 	--map-bottom-safe-space: 86px;
 	--map-side-panel-width: min(420px, calc(100vw - 20px));
 	--map-left-panel-width: min(380px, calc(100vw - 86px));
+}
+
+.map-engine-container {
+	position: absolute;
+	inset: 0;
+	z-index: 0;
+	background: #020815;
+	opacity: 1;
+	transform: scale(1);
+	transform-origin: center center;
+	filter: none;
+	transition:
+		opacity 760ms cubic-bezier(0.22, 1, 0.36, 1),
+		filter 760ms cubic-bezier(0.22, 1, 0.36, 1),
+		transform 760ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.map-engine-container--openlayers.map-engine-container--ol-home {
+	opacity: 0.16;
+	transform: scale(1.035);
+	filter: blur(1px) saturate(0.72) brightness(0.86);
+}
+
+.map-engine-container--openlayers.map-engine-container--ol-transition {
+	opacity: 1;
+	transform: scale(1);
+	filter: none;
+}
+
+.openlayers-home-earth {
+	position: absolute;
+	inset: 0;
+	z-index: 2;
+	display: grid;
+	place-items: center;
+	pointer-events: none;
+	opacity: 0;
+	transform: scale(0.98);
+	transform-origin: center center;
+	filter: blur(2px) saturate(0.9);
+	will-change: opacity, transform, filter;
+	transition:
+		opacity 760ms cubic-bezier(0.22, 1, 0.36, 1),
+		filter 760ms cubic-bezier(0.22, 1, 0.36, 1),
+		transform 760ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.openlayers-home-earth--visible {
+	opacity: 1;
+	transform: scale(1);
+	filter: none;
+}
+
+.openlayers-home-earth--leaving {
+	opacity: 0;
+	transform: scale(1.18);
+	filter: blur(8px) saturate(1.2) brightness(1.12);
+}
+
+.openlayers-home-earth__inner {
+	width: 100%;
+	height: 100%;
 }
 
 .bt {

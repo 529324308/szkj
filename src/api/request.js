@@ -1,3 +1,5 @@
+import { clearLogoutState } from '../utils/appStorage';
+
 /*
  * @Author: 喜闻乐见 529324308@qq.com
  * @Date: 2026-05-25 13:22:08
@@ -96,7 +98,7 @@ export async function request(url, options = {}) {
         try {
           await refreshPromise;
         } catch (e) {
-          localStorage.clear();
+          await clearLogoutState({ clearAll: true, clearCaches: true });
           window.location.reload();
           const err = new Error('登录已过期，请重新登录');
           err.cause = e;
@@ -133,7 +135,7 @@ export async function request(url, options = {}) {
 
   // 处理 401 未授权
   if (response.status === 401) {
-    localStorage.clear();
+    await clearLogoutState({ clearAll: true, clearCaches: true });
     window.location.reload();
     const err = new Error('未授权或登录已过期');
     err.status = 401;
