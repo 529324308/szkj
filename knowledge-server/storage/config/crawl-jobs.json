@@ -1,0 +1,223 @@
+[
+  {
+    "id": "crawl-20260624042504-s33ush",
+    "status": "completed",
+    "sourceIds": [
+      "source-policy-jzbdwf"
+    ],
+    "maxItemsPerSource": 3,
+    "fetchDetails": true,
+    "createdAt": "2026-06-24T04:25:04.554Z",
+    "updatedAt": "2026-06-24T04:25:04.953Z",
+    "startedAt": "2026-06-24T04:25:04.554Z",
+    "finishedAt": "2026-06-24T04:25:04.953Z",
+    "summary": {
+      "totalSources": 1,
+      "succeededSources": 1,
+      "failedSources": 0,
+      "discoveredItems": 3,
+      "downloadedDetails": 3
+    },
+    "results": [
+      {
+        "sourceId": "source-policy-jzbdwf",
+        "sourceName": "zj-natural-resources",
+        "status": "success",
+        "listUrl": "https://zrzyt.zj.gov.cn/col/col1229098242/index.html",
+        "listFile": "D:\\dxl\\szkj\\knowledge-server\\storage\\raw\\crawler\\crawl-20260624042504-s33ush\\source-policy-jzbdwf\\list.html",
+        "discoveredCount": 3,
+        "items": [
+          {
+            "index": 0,
+            "title": "政府信息 公开指南",
+            "url": "https://zrzyt.zj.gov.cn/col/col1229746657/index.html?key",
+            "detailSaved": true,
+            "detailFile": "D:\\dxl\\szkj\\knowledge-server\\storage\\raw\\crawler\\crawl-20260624042504-s33ush\\source-policy-jzbdwf\\detail-01.html",
+            "detailTitle": "信息公开指南"
+          },
+          {
+            "index": 1,
+            "title": "申请公开 政府信息",
+            "url": "https://zrzyt.zj.gov.cn/col/col1298106/index.html",
+            "detailSaved": true,
+            "detailFile": "D:\\dxl\\szkj\\knowledge-server\\storage\\raw\\crawler\\crawl-20260624042504-s33ush\\source-policy-jzbdwf\\detail-02.html",
+            "detailTitle": "公开制度"
+          },
+          {
+            "index": 2,
+            "title": "往年信息公开查看>>>",
+            "url": "https://zrzyt.zj.gov.cn/col/col1292398/index.html",
+            "detailSaved": true,
+            "detailFile": "D:\\dxl\\szkj\\knowledge-server\\storage\\raw\\crawler\\crawl-20260624042504-s33ush\\source-policy-jzbdwf\\detail-03.html",
+            "detailTitle": "信息公开指南"
+          }
+        ]
+      }
+    ],
+    "errors": []
+  },
+  {
+    "id": "crawl-20260624050514-7w0uxc",
+    "status": "completed",
+    "sourceIds": [
+      "source-policy-jzbdwf"
+    ],
+    "maxItemsPerSource": 1,
+    "fetchDetails": true,
+    "createdAt": "2026-06-24T05:05:14.522Z",
+    "updatedAt": "2026-06-24T05:05:14.873Z",
+    "startedAt": "2026-06-24T05:05:14.522Z",
+    "finishedAt": "2026-06-24T05:05:14.873Z",
+    "summary": {
+      "totalSources": 1,
+      "succeededSources": 1,
+      "failedSources": 0,
+      "discoveredItems": 1,
+      "downloadedDetails": 1
+    },
+    "results": [
+      {
+        "sourceId": "source-policy-jzbdwf",
+        "sourceName": "zj-natural-resources",
+        "status": "success",
+        "listUrl": "https://zrzyt.zj.gov.cn/col/col1229098242/index.html",
+        "listFile": "D:\\dxl\\szkj\\knowledge-server\\storage\\raw\\crawler\\crawl-20260624050514-7w0uxc\\source-policy-jzbdwf\\list.html",
+        "discoveredCount": 1,
+        "items": [
+          {
+            "index": 0,
+            "title": "政府信息 公开指南",
+            "url": "https://zrzyt.zj.gov.cn/col/col1229746657/index.html?key",
+            "detailSaved": true,
+            "detailFile": "D:\\dxl\\szkj\\knowledge-server\\storage\\raw\\crawler\\crawl-20260624050514-7w0uxc\\source-policy-jzbdwf\\detail-01.html",
+            "detailTitle": "信息公开指南"
+          }
+        ]
+      }
+    ],
+    "errors": []
+  },
+  {
+    "id": "crawl-20260624051628-ljp9nj",
+    "status": "completed",
+    "sourceIds": [
+      "source-policy-jzbdwf"
+    ],
+    "maxItemsPerSource": 1,
+    "fetchDetails": true,
+    "createdAt": "2026-06-24T05:16:28.347Z",
+    "updatedAt": "2026-06-24T05:16:28.700Z",
+    "startedAt": "2026-06-24T05:16:28.347Z",
+    "finishedAt": "2026-06-24T05:16:28.700Z",
+    "summary": {
+      "totalSources": 1,
+      "succeededSources": 1,
+      "failedSources": 0,
+      "discoveredItems": 1,
+      "downloadedDetails": 1
+    },
+    "results": [
+      {
+        "sourceId": "source-policy-jzbdwf",
+        "sourceName": "zj-natural-resources",
+        "status": "success",
+        "listUrl": "https://zrzyt.zj.gov.cn/col/col1229098242/index.html",
+        "listFile": "D:\\dxl\\szkj\\knowledge-server\\storage\\raw\\crawler\\crawl-20260624051628-ljp9nj\\source-policy-jzbdwf\\list.html",
+        "discoveredCount": 1,
+        "items": [
+          {
+            "index": 0,
+            "title": "政府信息 公开指南",
+            "url": "https://zrzyt.zj.gov.cn/col/col1229746657/index.html?key",
+            "detailSaved": true,
+            "detailFile": "D:\\dxl\\szkj\\knowledge-server\\storage\\raw\\crawler\\crawl-20260624051628-ljp9nj\\source-policy-jzbdwf\\detail-01.html",
+            "detailTitle": "信息公开指南"
+          }
+        ]
+      }
+    ],
+    "errors": []
+  },
+  {
+    "id": "crawl-20260624062847-ie2j9j",
+    "status": "completed",
+    "sourceIds": [
+      "source-policy-jzbdwf"
+    ],
+    "maxItemsPerSource": 1,
+    "fetchDetails": true,
+    "createdAt": "2026-06-24T06:28:47.583Z",
+    "updatedAt": "2026-06-24T06:28:47.940Z",
+    "startedAt": "2026-06-24T06:28:47.583Z",
+    "finishedAt": "2026-06-24T06:28:47.940Z",
+    "summary": {
+      "totalSources": 1,
+      "succeededSources": 1,
+      "failedSources": 0,
+      "discoveredItems": 1,
+      "downloadedDetails": 1
+    },
+    "results": [
+      {
+        "sourceId": "source-policy-jzbdwf",
+        "sourceName": "zj-natural-resources",
+        "status": "success",
+        "listUrl": "https://zrzyt.zj.gov.cn/col/col1229098242/index.html",
+        "listFile": "D:\\dxl\\szkj\\knowledge-server\\storage\\raw\\crawler\\crawl-20260624062847-ie2j9j\\source-policy-jzbdwf\\list.html",
+        "discoveredCount": 1,
+        "items": [
+          {
+            "index": 0,
+            "title": "政府信息 公开指南",
+            "url": "https://zrzyt.zj.gov.cn/col/col1229746657/index.html?key",
+            "detailSaved": true,
+            "detailFile": "D:\\dxl\\szkj\\knowledge-server\\storage\\raw\\crawler\\crawl-20260624062847-ie2j9j\\source-policy-jzbdwf\\detail-01.html",
+            "detailTitle": "信息公开指南"
+          }
+        ]
+      }
+    ],
+    "errors": []
+  },
+  {
+    "id": "crawl-20260624062850-s95mj4",
+    "status": "completed",
+    "sourceIds": [
+      "source-policy-jzbdwf"
+    ],
+    "maxItemsPerSource": 1,
+    "fetchDetails": true,
+    "createdAt": "2026-06-24T06:28:50.520Z",
+    "updatedAt": "2026-06-24T06:28:50.862Z",
+    "startedAt": "2026-06-24T06:28:50.520Z",
+    "finishedAt": "2026-06-24T06:28:50.862Z",
+    "summary": {
+      "totalSources": 1,
+      "succeededSources": 1,
+      "failedSources": 0,
+      "discoveredItems": 1,
+      "downloadedDetails": 1
+    },
+    "results": [
+      {
+        "sourceId": "source-policy-jzbdwf",
+        "sourceName": "zj-natural-resources",
+        "status": "success",
+        "listUrl": "https://zrzyt.zj.gov.cn/col/col1229098242/index.html",
+        "listFile": "D:\\dxl\\szkj\\knowledge-server\\storage\\raw\\crawler\\crawl-20260624062850-s95mj4\\source-policy-jzbdwf\\list.html",
+        "discoveredCount": 1,
+        "items": [
+          {
+            "index": 0,
+            "title": "政府信息 公开指南",
+            "url": "https://zrzyt.zj.gov.cn/col/col1229746657/index.html?key",
+            "detailSaved": true,
+            "detailFile": "D:\\dxl\\szkj\\knowledge-server\\storage\\raw\\crawler\\crawl-20260624062850-s95mj4\\source-policy-jzbdwf\\detail-01.html",
+            "detailTitle": "信息公开指南"
+          }
+        ]
+      }
+    ],
+    "errors": []
+  }
+]

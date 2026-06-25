@@ -1,4 +1,10 @@
 <template>
+  <PwaInstallButton />
+  <PwaInstallGuideOverlay
+    :visible="installGuideVisible"
+    @close="installGuideVisible = false"
+    @installed="installGuideVisible = false"
+  />
   <Login v-if="!loggedIn" @success="onLoginSuccess" />
   <template v-else>
     <CesiumMap
@@ -35,12 +41,15 @@
 </template>
 
 <script setup>
-import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import CesiumMap from './components/CesiumMap.vue';
 import OpenLayersMap from './components/OpenLayersMap.vue';
 import LoadingPage from './components/LoadingPage.vue';
 import WelcomeShaderOverlay from './components/ui/WelcomeShaderOverlay.vue';
 import Login from './components/Login.vue';
+import PwaInstallButton from './components/PwaInstallButton.vue';
+import PwaInstallGuideOverlay from './components/PwaInstallGuideOverlay.vue';
+import { usePwaInstall } from './composables/usePwaInstall';
 import { isTokenValid, logout } from './api/auth';
 import { forceFreshReload } from './utils/appStorage';
 import { buildConservativeRenderPreset, resolveRecommendedMapEngine } from './utils/deviceProfile';
@@ -61,7 +70,10 @@ const preferredMapEngine = ref('');
 const enterRequested = ref(false);
 const welcomeVisible = ref(false);
 const welcomeCompleted = ref(false);
+const installGuideVisible = ref(false);
+const hasShownInstallGuideForEntry = ref(false);
 let welcomeDelayTimer = null;
+const { isStandaloneApp } = usePwaInstall();
 
 onMounted(() => {
   if (isTokenValid()) {
@@ -201,6 +213,8 @@ function resetAuthenticatedState() {
   enterRequested.value = false;
   deviceProfile.value = null;
   renderPreset.value = null;
+  installGuideVisible.value = false;
+  hasShownInstallGuideForEntry.value = false;
 }
 
 function onEnterClick() {
@@ -257,6 +271,29 @@ function writePreferredMapEngine(engine) {
     // Ignore private-mode or quota failures.
   }
 }
+
+watch(
+  () => loggedIn.value && !loadingVisible.value && mapReady.value,
+  (enteredHome) => {
+    if (!enteredHome) {
+      installGuideVisible.value = false;
+      hasShownInstallGuideForEntry.value = false;
+      return;
+    }
+
+    if (!hasShownInstallGuideForEntry.value && !isStandaloneApp.value) {
+      installGuideVisible.value = true;
+      hasShownInstallGuideForEntry.value = true;
+    }
+  },
+  { immediate: true },
+);
+
+watch(isStandaloneApp, (standalone) => {
+  if (standalone) {
+    installGuideVisible.value = false;
+  }
+});
 </script>
 
 <style scoped>

@@ -14,7 +14,10 @@ import 'cesium/Source/Widgets/widgets.css'; // 导入 Cesium 样式
 import ElementPlus from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import 'element-plus/dist/index.css'
+import { registerServiceWorker } from './pwa'
 
 createApp(App).use(ElementPlus, {
   locale: zhCn,
 }).mount('#app')
+
+registerServiceWorker()

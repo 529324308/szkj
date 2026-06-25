@@ -1,0 +1,11 @@
+{
+  "name": "knowledge-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Phase 1 knowledge backend for the szkj project.",
+  "scripts": {
+    "dev": "node src/app.js",
+    "start": "node src/app.js"
+  }
+}

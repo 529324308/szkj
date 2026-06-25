@@ -24,6 +24,17 @@ export function createVectorStyle(feature) {
 	const selected = feature?.get?.('selected') === true;
 	const visible = feature?.get?.('visible') !== false;
 	if (!visible) return null;
+	if (kind === 'volumeGrid') {
+		return new Style({
+			stroke: new Stroke({
+				color: 'rgba(255, 255, 255, 0.82)',
+				width: 1.2,
+				lineDash: [6, 4],
+			}),
+			fill: new Fill({ color: 'rgba(69, 239, 255, 0.06)' }),
+			zIndex: 9000,
+		});
+	}
 	const label = buildFeatureLabel(feature);
 	const color = resolveColor(kind, feature);
 	const fillColor = resolveFill(kind, feature);
@@ -92,6 +103,7 @@ function resolveColor(kind, feature) {
 	if (feature?.get?.('color')) return feature.get('color');
 	if (kind === 'markPoint') return COLORS.markPoint;
 	if (['measure', 'distance', 'area', 'volume', 'azimuth', 'angle'].includes(kind)) return COLORS.measure;
+	if (kind === 'volumeGrid') return '#ffffff';
 	if (kind === 'landPrice') return COLORS.landPrice;
 	if (kind === 'import' || kind === 'shp') return COLORS.import;
 	if (kind === 'kml') return COLORS.kml;
@@ -107,6 +119,7 @@ function resolveFill(kind, feature) {
 	if (kind === 'landPrice') return 'rgba(34, 197, 94, 0.22)';
 	if (kind === 'markPoint') return 'rgba(249, 115, 22, 0.22)';
 	if (['measure', 'distance', 'area', 'volume', 'azimuth', 'angle'].includes(kind)) return 'rgba(69, 239, 255, 0.2)';
+	if (kind === 'volumeGrid') return 'rgba(69, 239, 255, 0.06)';
 	if (kind === 'import' || kind === 'shp') return 'rgba(56, 189, 248, 0.18)';
 	if (kind === 'kml') return 'rgba(167, 139, 250, 0.18)';
 	if (kind === 'cad') return 'rgba(57, 184, 255, 0.12)';

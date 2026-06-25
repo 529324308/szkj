@@ -1,0 +1,203 @@
+[
+  {
+    "id": "review-20260624052827-iznwrn",
+    "parseRunId": "parse-20260624051628-m9bbl1",
+    "crawlJobId": "crawl-20260624051628-ljp9nj",
+    "sourceId": "source-policy-jzbdwf",
+    "sourceName": "zj-natural-resources",
+    "sourceUrl": "https://zrzyt.zj.gov.cn/col/col1229746657/index.html?key",
+    "filePath": "D:\\dxl\\szkj\\knowledge-server\\storage\\raw\\crawler\\crawl-20260624051628-ljp9nj\\source-policy-jzbdwf\\detail-01.html",
+    "markdownFile": "D:\\dxl\\szkj\\knowledge-server\\storage\\markdown\\parsed\\crawl-20260624051628-ljp9nj\\parse-20260624051628-m9bbl1\\detail-01.md",
+    "title": "浙江省自然资源厅政府信息公开指南（2025年版）",
+    "sourceOrg": "浙江省自然资源厅",
+    "publishDate": "2026-03-13",
+    "docNo": "",
+    "region": "浙江",
+    "tags": [
+      "信息公开指南",
+      "政府信息"
+    ],
+    "summary": "本指南规定了浙江省自然资源厅在政府信息公开方面的主动公开和依申请公开政策，包括公开范围、目录编排体系、形式与时限，以及如何处理信息公开的申请。还提供了监督与救济渠道。",
+    "reviewStatus": "approved",
+    "dedupe": {
+      "status": "unique",
+      "matchedDocumentId": "",
+      "matchedReviewId": "",
+      "reason": ""
+    },
+    "aiExtract": {
+      "status": "parsed",
+      "model": "qwen2.5:32b-instruct-q4_K_M",
+      "structuredData": {
+        "docType": "指南",
+        "title": "浙江省自然资源厅政府信息公开指南（2025年版）",
+        "sourceOrg": "浙江省自然资源厅",
+        "publishDate": "2026-03-13",
+        "docNo": "",
+        "effectiveStatusHint": "unknown",
+        "region": "浙江",
+        "tags": [
+          "信息公开指南",
+          "政府信息"
+        ],
+        "summary": "本指南规定了浙江省自然资源厅在政府信息公开方面的主动公开和依申请公开政策，包括公开范围、目录编排体系、形式与时限，以及如何处理信息公开的申请。还提供了监督与救济渠道。",
+        "isPolicyLike": true,
+        "needsManualReview": false,
+        "reviewReasons": []
+      },
+      "reason": ""
+    },
+    "metadata": {
+      "ColId": "1229746657",
+      "SiteName": "浙江省自然资源厅",
+      "SiteDomain": "zrzyt.zj.gov.cn",
+      "SiteIDCode": "3300000024",
+      "ColumnName": "信息公开指南",
+      "ColumnType": "其他工作动态",
+      "ColumnDescription": "信息公开指南",
+      "ColumnKeywords": "信息公开指南",
+      "server": "zrzyt.zj.gov.cn/col/col1229746657/index.html"
+    },
+    "createdAt": "2026-06-24T05:28:27.983Z",
+    "updatedAt": "2026-06-24T05:28:28.045Z",
+    "reviewedAt": "2026-06-24T05:28:28.045Z",
+    "reviewNote": "approved by T7 smoke test",
+    "documentId": "policy-20260624052828-5pb0wa"
+  },
+  {
+    "id": "review-20260624062916-xu2m0e",
+    "parseRunId": "parse-20260624062850-mrzo96",
+    "crawlJobId": "crawl-20260624062850-s95mj4",
+    "sourceId": "source-policy-jzbdwf",
+    "sourceName": "zj-natural-resources",
+    "sourceUrl": "https://zrzyt.zj.gov.cn/col/col1229746657/index.html?key",
+    "filePath": "D:\\dxl\\szkj\\knowledge-server\\storage\\raw\\crawler\\crawl-20260624062850-s95mj4\\source-policy-jzbdwf\\detail-01.html",
+    "markdownFile": "D:\\dxl\\szkj\\knowledge-server\\storage\\markdown\\parsed\\crawl-20260624062850-s95mj4\\parse-20260624062850-mrzo96\\detail-01.md",
+    "title": "????????????????(2025??)-????",
+    "sourceOrg": "浙江省自然资源厅",
+    "publishDate": "2026-03-13",
+    "docNo": "",
+    "region": "???",
+    "tags": [
+      "????",
+      "??????"
+    ],
+    "summary": "该指南详细规定了浙江省自然资源厅在处理政府信息公开申请时的原则、范围和流程。涉及主动公开的信息类型，以及依申请公开的程序，包括申请方式、受理机构及如何处理申请。",
+    "reviewStatus": "approved",
+    "dedupe": {
+      "status": "suspected_duplicate",
+      "matchedDocumentId": "policy-20260624052828-5pb0wa",
+      "matchedReviewId": "",
+      "reason": "Title/source/date signature matched an approved document."
+    },
+    "aiExtract": {
+      "status": "parsed",
+      "model": "qwen2.5:32b-instruct-q4_K_M",
+      "structuredData": {
+        "docType": "",
+        "title": "信息公开指南",
+        "sourceOrg": "浙江省自然资源厅",
+        "publishDate": "2026-03-13",
+        "docNo": "",
+        "effectiveStatusHint": "unknown",
+        "region": "浙江省",
+        "tags": [
+          "政府信息",
+          "公开制度",
+          "法定主动公开内容"
+        ],
+        "summary": "该指南详细规定了浙江省自然资源厅在处理政府信息公开申请时的原则、范围和流程。涉及主动公开的信息类型，以及依申请公开的程序，包括申请方式、受理机构及如何处理申请。",
+        "isPolicyLike": true,
+        "needsManualReview": false,
+        "reviewReasons": []
+      },
+      "reason": ""
+    },
+    "metadata": {
+      "ColId": "1229746657",
+      "SiteName": "浙江省自然资源厅",
+      "SiteDomain": "zrzyt.zj.gov.cn",
+      "SiteIDCode": "3300000024",
+      "ColumnName": "信息公开指南",
+      "ColumnType": "其他工作动态",
+      "ColumnDescription": "信息公开指南",
+      "ColumnKeywords": "信息公开指南",
+      "server": "zrzyt.zj.gov.cn/col/col1229746657/index.html"
+    },
+    "createdAt": "2026-06-24T06:29:16.686Z",
+    "updatedAt": "2026-06-24T06:29:16.709Z",
+    "reviewedAt": "2026-06-24T06:29:16.709Z",
+    "reviewNote": "approved after metadata patch",
+    "documentId": "policy-20260624062916-rasvi6"
+  },
+  {
+    "id": "review-20260624062928-isp03x",
+    "parseRunId": "parse-20260624062847-twvjgi",
+    "crawlJobId": "crawl-20260624062847-ie2j9j",
+    "sourceId": "source-policy-jzbdwf",
+    "sourceName": "zj-natural-resources",
+    "sourceUrl": "https://zrzyt.zj.gov.cn/col/col1229746657/index.html?key",
+    "filePath": "D:\\dxl\\szkj\\knowledge-server\\storage\\raw\\crawler\\crawl-20260624062847-ie2j9j\\source-policy-jzbdwf\\detail-01.html",
+    "markdownFile": "D:\\dxl\\szkj\\knowledge-server\\storage\\markdown\\parsed\\crawl-20260624062847-ie2j9j\\parse-20260624062847-twvjgi\\detail-01.md",
+    "title": "信息公开指南",
+    "sourceOrg": "浙江省自然资源厅",
+    "publishDate": "2026-03-13",
+    "docNo": "",
+    "region": "浙江省",
+    "tags": [
+      "reviewed",
+      "政府信息",
+      "公开制度",
+      "主动公开",
+      "申请公开"
+    ],
+    "summary": "本指南明确了浙江省自然资源厅信息公开的范围、形式和时限，包括主动公开与依申请公开的内容及流程。",
+    "reviewStatus": "approved",
+    "dedupe": {
+      "status": "suspected_duplicate",
+      "matchedDocumentId": "policy-20260624052828-5pb0wa",
+      "matchedReviewId": "",
+      "reason": "Title/source/date signature matched an approved document."
+    },
+    "aiExtract": {
+      "status": "parsed",
+      "model": "qwen2.5:32b-instruct-q4_K_M",
+      "structuredData": {
+        "docType": "其他工作动态",
+        "title": "信息公开指南",
+        "sourceOrg": "浙江省自然资源厅",
+        "publishDate": "2026-03-13",
+        "docNo": "",
+        "effectiveStatusHint": "unknown",
+        "region": "浙江省",
+        "tags": [
+          "政府信息",
+          "公开制度",
+          "主动公开",
+          "申请公开"
+        ],
+        "summary": "本指南明确了浙江省自然资源厅信息公开的范围、形式和时限，包括主动公开与依申请公开的内容及流程。",
+        "isPolicyLike": true,
+        "needsManualReview": false,
+        "reviewReasons": []
+      },
+      "reason": ""
+    },
+    "metadata": {
+      "ColId": "1229746657",
+      "SiteName": "浙江省自然资源厅",
+      "SiteDomain": "zrzyt.zj.gov.cn",
+      "SiteIDCode": "3300000024",
+      "ColumnName": "信息公开指南",
+      "ColumnType": "其他工作动态",
+      "ColumnDescription": "信息公开指南",
+      "ColumnKeywords": "信息公开指南",
+      "server": "zrzyt.zj.gov.cn/col/col1229746657/index.html"
+    },
+    "createdAt": "2026-06-24T06:29:28.361Z",
+    "updatedAt": "2026-06-24T06:29:28.364Z",
+    "reviewedAt": "2026-06-24T06:29:28.364Z",
+    "reviewNote": "approved by smoke test",
+    "documentId": "policy-20260624062928-dhzozy"
+  }
+]

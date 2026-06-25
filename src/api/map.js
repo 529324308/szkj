@@ -49,3 +49,9 @@ export function getFeaturesByNodeIdAsync(id) {
     body: JSON.stringify(String(id)),
   });
 }
+
+export function getPropertyKeys() {
+  return request('/api/PropertyKeys', {
+    method: 'GET',
+  });
+}

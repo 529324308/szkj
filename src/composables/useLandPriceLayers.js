@@ -1,5 +1,6 @@
 import { reactive, ref } from 'vue';
 import * as Cesium from 'cesium';
+import { ensurePropertyKeyMapLoaded, mapPropertyNames } from '../utils/propertyKeys';
 
 export function useLandPriceLayers({ getViewer, measurePanelVisible = null }) {
 	const list = ref([]);
@@ -620,6 +621,28 @@ export function useLandPriceLayers({ getViewer, measurePanelVisible = null }) {
 		return undefined;
 	}
 
+	const DJCX_INTERNAL_PROPERTY_KEYS = new Set(['__djcxIndex', '__djcxTotal']);
+
+	async function ensureDjcxPropertyKeysReady() {
+		try {
+			await ensurePropertyKeyMapLoaded();
+		} catch (error) {
+			console.warn('加载地价要素字段映射失败:', error);
+		}
+	}
+
+	function djcxBuildMappedProperties(props, matchCount) {
+		const out = mapPropertyNames(props, { skipKeys: DJCX_INTERNAL_PROPERTY_KEYS });
+		if (matchCount != null) out.匹配数量 = matchCount;
+		return out;
+	}
+
+	function djcxResolveFeatureTitle(entity, index) {
+		const props = entity?._djcxProperties || {};
+		const value = djcxGetProp(props, ['DKBH', 'dkbh', 'XMMC', 'xmmc', 'NAME', 'name', 'title', 'TITLE', 'id', 'fid']);
+		return String(value || `要素${index + 1}`);
+	}
+
 	function djcxFormatPercent(value) {
 		if (value == null || value === '') return value;
 		if (typeof value === 'string') {
@@ -670,69 +693,11 @@ export function useLandPriceLayers({ getViewer, measurePanelVisible = null }) {
 
 	function djcxBuildQueryResultProperties(entity, matchCount) {
 		const props = entity?._djcxProperties || {};
-		const out = {};
-		const nodeId = String(entity?._djcxNodeId ?? '');
-		const isNode26Or27 = nodeId === '26' || nodeId === '27';
-		const fields = isNode26Or27
-			? [
-				{ label: '地块编号', keys: ['地块编号', 'DKBH', 'dkbh'] },
-				{ label: '项目名称', keys: ['项目名称', 'XMMC', 'xmmc'] },
-				{ label: '年份', keys: ['年份', 'NF', 'nf', 'YEAR', 'year', 'ND', 'nd', '年度'] },
-				{ label: '土地坐落', keys: ['土地坐落', 'TDZL', 'tdzl', 'ZL', 'zl'] },
-				{ label: '供应方式', keys: ['供应方式', 'GYFS', 'gyfs'] },
-				{ label: '用地批准时间', keys: ['用地批准时间', 'YDPZRQ', 'ydpzrq', 'PZRQ', 'pzrq'] },
-				{ label: '批准文号', keys: ['批准文号', 'PZWH', 'pzwh'] },
-				{ label: '合同取得日期', keys: ['合同取得日期', 'HTQDRQ', 'htqdrq', 'HTRQ', 'htrq'] },
-				{ label: '行业分类', keys: ['行业分类', 'HYFL', 'hyfl'] },
-				{ label: '土地用途', keys: ['土地用途', 'TDYT', 'tdyt', '用途'] },
-				{ label: '供应总面积(平方千米)', keys: ['供应总面积', 'GDZMJ', 'gdzmj', 'ZMJ', 'zmj', 'Shape_Area', 'shape_area'] },
-				{ label: '使用权人', keys: ['使用权人', 'SYQR', 'syqr'] },
-				{ label: '单位面积地价(元/平方米)', keys: ['单位面积地价', 'DWMJDJ', 'dwmjdj'] },
-				{ label: '楼面价(元/平方米)', keys: ['楼面价', 'LMJ', 'lmj', '楼面地价', 'LMDJ', 'lmdj'] },
-				{ label: '成交价(万元)', keys: ['成交价', 'CJJ', 'cjj', 'CJJE', 'cjje'] },
-				{ label: '评估报告编号', keys: ['评估报告编号', 'PGBBH', 'pgbbh', 'PGBH', 'pgbh'] },
-				{ label: '评估时间', keys: ['评估时间', 'PGSJ', 'pgsj'] },
-				{ label: '出让年限', keys: ['出让年限', 'CRNX', 'crnx', 'SYNX', 'synx'] },
-				{ label: '容积率', keys: ['容积率', 'RJL', 'rjl', 'FAR', 'far'] },
-				{ label: '最大容积率', keys: ['最大容积率', 'ZDRJL', 'zdrjl', 'MAXRJL', 'maxrjl'] },
-				{ label: '建筑密度', keys: ['建筑密度', 'JZMD', 'jzmd', 'BUILD_DENS', 'build_dens', 'BUILDING_DENSITY'] },
-			]
-			: [
-				{ label: '行政区代码', keys: ['行政区代码', 'XZQDM', 'xzqdm', 'ADCODE', 'adcode', '行政区划代码', 'XZQ_CODE', 'xzq_code'] },
-				{ label: '行政区名称', keys: ['行政区名称', 'XZQMC', 'xzqmc', 'NAME', 'name', '行政区划名称', 'XZQ_NAME', 'xzq_name'] },
-				{ label: '年份', keys: ['年份', 'YEAR', 'year', 'ND', 'nd', '年度'] },
-				{ label: '地价体系', keys: ['地价体系', 'DJTX', 'djtx', 'PRICE_SYSTEM', 'price_system'] },
-				{ label: '土地用途', keys: ['土地用途', 'TDYT', 'tdyt', 'LAND_USE', 'land_use', '用途'] },
-				{ label: '土地级别', keys: ['土地级别', 'TDJB', 'tdjb', 'LEVEL', 'level', '级别'] },
-				{ label: '级别价(元/平方米)', keys: ['级别价', 'JBJ', 'jbj', 'LEVEL_PRICE', 'level_price', 'JIBIEJIA'] },
-				{ label: '楼面地价(元/平方米)', keys: ['楼面地价', 'LMDJ', 'lmdj', 'FLOOR_PRICE', 'floor_price'] },
-				{ label: '亩地均价(元/亩)', keys: ['亩地均价', 'MDJJ', 'mdjj', 'MU_AVG_PRICE', 'mu_avg_price'] },
-				{ label: '容积率', keys: ['容积率', 'RJL', 'rjl', 'FAR', 'far'] },
-				{ label: '建筑密度', keys: ['建筑密度', 'JZMD', 'jzmd', 'BUILD_DENS', 'build_dens', 'BUILDING_DENSITY'] },
-				{ label: '土地使用年限', keys: ['土地使用年限', 'TDNX', 'tdnx', 'SYNX', 'synx', 'USE_YEARS', 'use_years'] },
-				{ label: '土地开发程度', keys: ['土地开发程度', 'TDKFCD', 'tdkfcd', 'DEVELOP_LEVEL', 'develop_level'] },
-				{ label: '估价期日', keys: ['估价期日', 'GJQR', 'gjqr', 'GJQD', 'gjqd', 'DATE', 'date', '估价日期'] },
-			];
-
-		let hit = false;
-		for (const field of fields) {
-			let value = djcxGetProp(props, field.keys);
-			if (value == null || value === '') continue;
-			if (field.label === '建筑密度') value = djcxFormatPercent(value);
-			if (field.label === '土地使用年限' || field.label === '出让年限') value = djcxFormatYears(value);
-			if (field.label === '用地批准时间' || field.label === '合同取得日期' || field.label === '评估时间' || field.label === '估价期日') {
-				value = djcxFormatDate(value);
-			}
-			out[field.label] = value;
-			hit = true;
-		}
-
-		if (matchCount != null) out.匹配数量 = matchCount;
-		if (hit || matchCount != null) return out;
-		return props;
+		return djcxBuildMappedProperties(props, matchCount);
 	}
 
-	function djcxShowFeatureInPanel(entity, matchCount) {
+	async function djcxShowFeatureInPanel(entity, matchCount) {
+		await ensureDjcxPropertyKeysReady();
 		const centroid = djcxEntityCentroidLonLat(entity);
 		clickInfo.value = {
 			coordinates: centroid,
@@ -743,16 +708,13 @@ export function useLandPriceLayers({ getViewer, measurePanelVisible = null }) {
 		if (measurePanelVisible) measurePanelVisible.value = false;
 	}
 
-	function djcxShowFeaturesInTable(entities, options = {}) {
+	async function djcxShowFeaturesInTable(entities, options = {}) {
+		await ensureDjcxPropertyKeysReady();
 		const list = Array.isArray(entities) ? entities.filter(Boolean) : [];
 		if (!list.length) return;
 		const items = list.map((entity) => ({ entity, props: djcxBuildQueryResultProperties(entity) || {} }));
-		const rawNames = items.map((item, index) => {
-			const props = item.props || {};
-			return String(props.地块编号 || props.项目名称 || `要素${index + 1}`);
-		});
 		const nameCount = new Map();
-		const colNames = rawNames.map((name) => {
+		const colNames = items.map((item, index) => djcxResolveFeatureTitle(item.entity, index)).map((name) => {
 			const key = String(name || '要素');
 			const count = (nameCount.get(key) || 0) + 1;
 			nameCount.set(key, count);

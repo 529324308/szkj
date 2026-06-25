@@ -33,7 +33,7 @@
 
         <div class="loading-topbar__actions">
           <details v-if="showEngineChoices && secondaryEngineOption" class="loading-engine-switch">
-            <summary>备用版本</summary>
+            <summary>备用入口</summary>
             <div class="loading-engine-switch__menu">
               <span>{{ secondaryEngineOption.title }}</span>
               <button
@@ -46,7 +46,7 @@
               </button>
             </div>
           </details>
-          <button type="button" class="loading-topbar__retry" @click="runDetection(true)">重测</button>
+          <button type="button" class="loading-topbar__retry" @click="runDetection(true)">重新预检</button>
         </div>
       </header>
 
@@ -70,7 +70,7 @@
         <div v-if="errorText" class="loading-error">
           <strong>{{ errorTitle }}</strong>
           <span>{{ errorText }}</span>
-          <button type="button" @click="runDetection(true)">重新检测</button>
+          <button type="button" @click="runDetection(true)">重新预检</button>
         </div>
       </main>
     </div>
@@ -111,11 +111,11 @@ const props = defineProps({
 const emit = defineEmits(['profile-ready', 'enter-click', 'enter-engine']);
 
 const progress = ref(0);
-const stageText = ref('正在初始化加载环境');
+const stageText = ref('系统准备中');
 const profile = ref(null);
 const preset = ref(null);
 const errorText = ref('');
-const errorTitle = ref('检测失败');
+const errorTitle = ref('预检失败');
 const isRunning = ref(false);
 const enterPromptReady = computed(() => {
   const primary = primaryEngineOption.value;
@@ -125,7 +125,7 @@ const enterPromptReady = computed(() => {
   return !!profile.value;
 });
 const isLeaving = ref(false);
-const profileSource = ref('实时检测');
+const profileSource = ref('实时预检');
 let runId = 0;
 let leaveTimer = null;
 let autoEnterTimer = null;
@@ -143,17 +143,17 @@ const scoreText = computed(() => {
   const score = profile.value?.benchmark?.totalScore;
   return typeof score === 'number' ? `${score.toFixed(1)}` : '--';
 });
-const tierText = computed(() => profile.value?.benchmark?.tierText || '检测中');
+const tierText = computed(() => profile.value?.benchmark?.tierText || '评估中');
 const effectiveRecommendedEngine = computed(() => (
   props.recommendedMapEngine || (profile.value ? resolveRecommendedMapEngine(profile.value) : '')
 ));
-const recommendedEngineText = computed(() => formatEngineName(effectiveRecommendedEngine.value) || '检测中');
+const recommendedEngineText = computed(() => formatEngineName(effectiveRecommendedEngine.value) || '评估中');
 const statusText = computed(() => {
-  if (props.mapReady) return '地图已就绪';
-  if (props.selectedMapEngine) return `等待${formatEngineName(props.selectedMapEngine)}就绪`;
-  if (profile.value) return '请选择地图版本';
-  if (errorText.value) return '检测异常';
-  return '正在检测';
+  if (props.mapReady) return '系统已就绪';
+  if (props.selectedMapEngine) return `正在接入${formatEngineName(props.selectedMapEngine)}`;
+  if (profile.value) return '版本待选';
+  if (errorText.value) return '预检异常';
+  return '系统准备中';
 });
 const statusDotClass = computed(() => ({
   'is-error': !!errorText.value,
@@ -172,8 +172,8 @@ const topBarMetrics = computed(() => {
     { label: '推荐', value: recommendedEngineText.value },
     { label: '上次', value: formatEngineName(props.preferredMapEngine) || '暂无' },
     { label: '视口', value: viewport },
-    { label: 'WebGL', value: webgl.supported ? webgl.version : progress.value >= 25 ? '检测中' : '待检测' },
-    { label: '来源', value: profile.value ? profileSource.value : '实时检测' },
+    { label: 'WebGL', value: webgl.supported ? webgl.version : progress.value >= 25 ? '校验中' : '待校验' },
+    { label: '来源', value: profile.value ? profileSource.value : '实时预检' },
   ];
 });
 const showEngineChoices = computed(() => !!profile.value);
@@ -181,7 +181,7 @@ const showCenterEnterPrompt = computed(() => props.visible);
 const canSelectPrimaryEngine = computed(() => (
   enterPromptReady.value && !isLeaving.value && !!primaryEngineOption.value && !primaryEngineOption.value.disabled
 ));
-const enterButtonText = computed(() => (enterPromptReady.value ? '进入系统' : '检测系统中'));
+const enterButtonText = computed(() => (enterPromptReady.value ? '进入系统' : '系统准备中'));
 const engineOptions = computed(() => {
   const recommended = effectiveRecommendedEngine.value;
   const preferred = props.preferredMapEngine;
@@ -191,7 +191,7 @@ const engineOptions = computed(() => {
       engine: 'openlayers',
       title: 'OpenLayers 轻量版',
       desc: '适合低配设备和二维业务地图，启动更轻。',
-      badge: recommended === 'openlayers' ? '硬件推荐' : '二维优先',
+      badge: recommended === 'openlayers' ? '系统推荐' : '二维优先',
       recommended: recommended === 'openlayers',
       preferred: preferred === 'openlayers',
       disabled: false,
@@ -201,7 +201,7 @@ const engineOptions = computed(() => {
       engine: 'cesium',
       title: 'Cesium 高性能版',
       desc: '适合三维地形、3D Tiles 和高性能场景。',
-      badge: recommended === 'cesium' ? '硬件推荐' : '三维能力',
+      badge: recommended === 'cesium' ? '系统推荐' : '三维能力',
       recommended: recommended === 'cesium',
       preferred: preferred === 'cesium',
       disabled: cesiumDisabled,
@@ -224,12 +224,12 @@ async function runDetection(force = false) {
   clearAutoEnterTimer();
   isRunning.value = true;
   errorText.value = '';
-  errorTitle.value = '检测失败';
+  errorTitle.value = '预检失败';
   profile.value = null;
   preset.value = null;
-  profileSource.value = force ? '重新检测' : '实时检测';
+  profileSource.value = force ? '重新预检' : '实时预检';
   progress.value = force ? 4 : 0;
-  stageText.value = '正在初始化加载环境';
+  stageText.value = '系统准备中';
   if (force) clearDeviceProfileCache();
 
   try {
@@ -245,29 +245,29 @@ async function runDetection(force = false) {
 
     profile.value = result.profile;
     preset.value = result.preset;
-    profileSource.value = result.fromCache ? '缓存档案' : '实时检测';
+    profileSource.value = result.fromCache ? '缓存档案' : '实时预检';
 
     if (!result.profile?.webgl?.supported) {
-      errorTitle.value = '当前浏览器不支持 WebGL';
-      errorText.value = 'Cesium 高性能版需要 WebGL，可先进入 OpenLayers 轻量版。';
+      errorTitle.value = '安全校验未通过';
+      errorText.value = '当前环境暂不满足 Cesium 高性能版要求，可先进入 OpenLayers 轻量版。';
       progress.value = 100;
-      stageText.value = '检测完成，请选择进入的地图版本';
+      stageText.value = '安全校验完成，请选择进入版本';
       emitProfileReady(result);
       return;
     }
 
     progress.value = Math.max(progress.value, 90);
-    stageText.value = result.fromCache ? '已读取设备档案，请选择进入的地图版本' : '检测完成，请选择进入的地图版本';
+    stageText.value = result.fromCache ? '已读取设备档案，正在生成进入建议' : '系统准备完成，请选择进入版本';
     emitProfileReady(result);
   } catch (error) {
     if (currentRun !== runId) return;
     console.error('[LoadingPage] device profiling failed:', error);
-    errorTitle.value = '设备检测异常';
-    errorText.value = '已无法完成当前设备跑分，仍可进入 OpenLayers 轻量版。';
+    errorTitle.value = '设备预检异常';
+    errorText.value = '当前设备暂未完成完整评估，仍可进入 OpenLayers 轻量版。';
     profile.value = createFailureProfile();
     preset.value = null;
     progress.value = 100;
-    stageText.value = '检测异常，请选择进入的地图版本';
+    stageText.value = '预检异常，请选择进入版本';
     emitProfileReady({
       profile: profile.value,
       preset: null,
@@ -281,7 +281,7 @@ async function runDetection(force = false) {
 watch(() => props.mapReady, (ready) => {
   if (!ready) return;
   progress.value = 100;
-  stageText.value = '所选地图版本已就绪';
+  stageText.value = '工作台已就绪';
 });
 
 watch(() => props.visible, (visible) => {
@@ -300,7 +300,7 @@ watch(() => props.visible, (visible) => {
 
 watch(() => props.selectedMapEngine, (engine) => {
   if (!engine || props.mapReady) return;
-  stageText.value = `正在加载${formatEngineName(engine)}`;
+  stageText.value = `正在接入${formatEngineName(engine)}`;
   progress.value = Math.max(progress.value, 96);
 });
 
@@ -327,12 +327,12 @@ function selectEngine(engine) {
   emitEnterClick();
   emit('enter-engine', { engine });
   if (props.mapReady && props.selectedMapEngine === engine) {
-    stageText.value = `正在进入${formatEngineName(engine)}`;
+    stageText.value = '工作台已就绪';
     progress.value = 100;
     return;
   }
 
-  stageText.value = `正在加载${formatEngineName(engine)}`;
+  stageText.value = `正在接入${formatEngineName(engine)}`;
   progress.value = Math.max(progress.value, 96);
 }
 
@@ -407,6 +407,9 @@ function createFailureProfile() {
       version: '',
       renderer: '',
       vendor: '',
+      gpuClass: 'unknown',
+      discreteGpu: false,
+      discreteGpuReason: 'Device profiling failed',
       maxTextureSize: 0,
       maxRenderbufferSize: 0,
       maxVertexTextureImageUnits: 0,

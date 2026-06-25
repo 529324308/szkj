@@ -114,9 +114,17 @@
                   <el-table-column label="要素数" min-width="100" align="center">
                     <template #default="{ row: task }">{{ task.featureCount }}</template>
                   </el-table-column>
-                  <el-table-column label="操作" width="120" fixed="right">
+                  <el-table-column label="操作" width="160" fixed="right">
                     <template #default="{ row: task }">
                       <el-button type="primary" link @click="viewTaskDetail(task)">详情</el-button>
+                      <el-button
+                        type="danger"
+                        link
+                        :loading="deletingTaskId === String(task.id)"
+                        @click="handleDeleteTask(row, task)"
+                      >
+                        删除
+                      </el-button>
                     </template>
                   </el-table-column>
                 </el-table>
@@ -150,10 +158,18 @@
             <template #default="{ row }">{{ formatDateTime(row.importedTime) }}</template>
           </el-table-column>
           <el-table-column prop="remark" label="备注" min-width="160" show-overflow-tooltip />
-          <el-table-column label="操作" width="120" fixed="right">
+          <el-table-column label="操作" width="180" fixed="right">
             <template #default="{ row }">
               <el-button link type="primary" @click="toggleProjectExpanded(row)">
                 {{ expandedProjectIds.includes(row.projectId) ? '收起任务' : '展开任务' }}
+              </el-button>
+              <el-button
+                link
+                type="danger"
+                :loading="deletingProjectId === row.projectId"
+                @click="handleDeleteProject(row)"
+              >
+                删除
               </el-button>
             </template>
           </el-table-column>
@@ -234,7 +250,7 @@
   </el-drawer>
 
   <el-dialog v-model="createDialogVisible" title="下发巡检任务" width="720px" append-to-body>
-    <el-form label-width="100px" class="dialog-form">
+    <el-form label-width="100px" class="dialog-form" @submit.prevent>
       <el-form-item label="工程名称">
         <el-input v-model.trim="createForm.projectName" placeholder="可不填，默认取 zip 文件名" />
       </el-form-item>
@@ -366,7 +382,7 @@
           </el-table>
         </el-card>
 
-        <el-form class="review-form">
+        <el-form class="review-form" @submit.prevent>
           <el-form-item label="审核意见" label-width="90px">
             <el-input v-model.trim="reviewForm.reason" type="textarea" :rows="4" placeholder="通过可选填，驳回请填写原因" />
           </el-form-item>
@@ -396,10 +412,12 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import InspectionPlaybackWindow from './InspectionPlaybackWindow.vue';
 import {
   createInspectionTask,
+  deleteInspectionTask,
+  deleteImportedFile,
   getImportedFilePage,
   getInspectionRouteCatalog,
   getInspectionTaskPagedList,
@@ -449,6 +467,8 @@ const selectedTaskId = ref('');
 const detailTask = ref(null);
 const routeCatalog = ref([]);
 const expandedProjectIds = ref([]);
+const deletingProjectId = ref('');
+const deletingTaskId = ref('');
 const projectPagination = reactive({
   page: 1,
   pageSize: 10,
@@ -469,6 +489,8 @@ const createForm = reactive({
   deadline: '',
   remark: '',
 });
+let projectImportToken = 0;
+let preserveImportedFileOnClose = false;
 
 // 截止日期限制：不能选择今天之前的日期，最大期限不超过7天
 const disabledDeadlineDate = (time) => {
@@ -658,11 +680,12 @@ async function loadTasks() {
       importedUser: filters.importedUser,
       importedType: filters.importedType,
       areaId: filters.areaId,
+      isContainTask: true,
     });
     projectList.value = list.map((item) => ({
       ...item,
-      projectId: String(item.id || ''),
-      fileId: String(item.id || ''),
+      projectId: String(item.projectId ?? item.id ?? item.fileId ?? ''),
+      fileId: String(item.fileId ?? item.id ?? item.projectId ?? ''),
       projectName: item.fileName || '未命名工程',
       importedUser: item.importedUser || '--',
       importedType: item.importedType || '--',
@@ -837,6 +860,125 @@ async function toggleProjectExpanded(project) {
   }
 }
 
+async function reloadExpandedProjectTasks(projectId) {
+  const target = projectList.value.find((item) => item.projectId === projectId);
+  if (!target) {
+    expandedProjectIds.value = expandedProjectIds.value.filter((item) => item !== projectId);
+    return;
+  }
+
+  expandedProjectIds.value = [projectId];
+  await nextTick();
+  await loadProjectTasks(projectId, target.fileId);
+}
+
+async function handleDeleteProject(project) {
+  const projectId = String(project?.projectId || '').trim();
+  const fileId = String(project?.fileId || '').trim();
+  if (!projectId || !fileId) {
+    ElMessage.error('当前工程缺少必要标识，无法删除');
+    return;
+  }
+
+  try {
+    await ElMessageBox.confirm(
+      `确定删除工程“${project.projectName || projectId}”吗？`,
+      '提示',
+      {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        type: 'warning',
+      }
+    );
+  } catch {
+    return;
+  }
+
+  deletingProjectId.value = projectId;
+  try {
+    await deleteImportedFile(fileId);
+    expandedProjectIds.value = expandedProjectIds.value.filter((item) => item !== projectId);
+    delete taskPaginationMap[projectId];
+    delete taskLoadingMap[projectId];
+
+    if (detailTask.value?.projectId === projectId) {
+      detailTask.value = null;
+      detailPanelVisible.value = false;
+      selectedTaskId.value = '';
+    }
+
+    if (projectList.value.length === 1 && projectPagination.page > 1) {
+      projectPagination.page -= 1;
+    }
+
+    await loadTasks();
+    ElMessage.success('工程已删除');
+  } catch (error) {
+    ElMessage.error(error?.message || '删除工程失败');
+  } finally {
+    deletingProjectId.value = '';
+  }
+}
+
+async function handleDeleteTask(project, task) {
+  const projectId = String(project?.projectId || '').trim();
+  const fileId = String(project?.fileId || '').trim();
+  const taskId = String(task?.id ?? '').trim();
+  if (!projectId || !fileId) {
+    ElMessage.error('当前工程缺少必要标识，无法删除任务');
+    return;
+  }
+  if (!taskId) {
+    ElMessage.error('当前任务缺少任务 ID，无法删除');
+    return;
+  }
+
+  try {
+    await ElMessageBox.confirm(
+      `确定删除任务“${task.taskName || taskId}”吗？`,
+      '提示',
+      {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        type: 'warning',
+      }
+    );
+  } catch {
+    return;
+  }
+
+  deletingTaskId.value = taskId;
+  try {
+    await deleteInspectionTask(taskId);
+
+    if (selectedTaskId.value === taskId) {
+      selectedTaskId.value = '';
+      detailTask.value = null;
+      detailPanelVisible.value = false;
+    }
+
+    if (playbackTask.value?.id === taskId) {
+      closePlaybackPanel();
+    }
+
+    const pageState = getTaskPageState(projectId);
+    const currentTotal = Number(pageState.total || project.taskCount || 0);
+    const nextTotal = Math.max(0, currentTotal - 1);
+    const maxPage = Math.max(1, Math.ceil(nextTotal / pageState.pageSize));
+    if (pageState.page > maxPage) {
+      pageState.page = maxPage;
+    }
+
+    await loadTasks();
+    await reloadExpandedProjectTasks(projectId);
+    ElMessage.success('任务已删除');
+  } catch (error) {
+    ElMessage.error(error?.message || '删除任务失败');
+  } finally {
+    deletingTaskId.value = '';
+  }
+}
+
 async function viewTaskDetail(task) {
   selectedTaskId.value = task.id;
   detailPanelVisible.value = true;
@@ -933,6 +1075,7 @@ async function submitRouteReview(action) {
 }
 
 function openCreateDialog() {
+  preserveImportedFileOnClose = false;
   createDialogVisible.value = true;
 }
 
@@ -942,11 +1085,43 @@ async function resetProjectUpload() {
   await nextTick();
 }
 
-async function clearProjectZip() {
+async function resetProjectZipState() {
+  createSubmitting.value = false;
   createForm.zipFile = null;
   createForm.zipFileName = '';
   createForm.importedFileId = '';
   await resetProjectUpload();
+}
+
+async function clearProjectZip(options = {}) {
+  const {
+    removeImportedFile = true,
+    silent = false,
+    preserveStateOnDeleteFailure = !silent,
+  } = options;
+  const importedFileId = String(createForm.importedFileId || '').trim();
+  projectImportToken += 1;
+
+  if (removeImportedFile && importedFileId) {
+    try {
+      await deleteImportedFile(importedFileId);
+    } catch (error) {
+      if (silent) {
+        console.error('Failed to delete imported file:', error);
+      } else {
+        ElMessage.error(error?.message || '移除工程文件失败');
+      }
+      if (preserveStateOnDeleteFailure) {
+        return false;
+      }
+    }
+  }
+
+  await resetProjectZipState();
+  if (!silent && removeImportedFile && importedFileId) {
+    ElMessage.success('工程文件已移除');
+  }
+  return true;
 }
 
 function beforeProjectZipUpload(rawFile) {
@@ -967,6 +1142,7 @@ async function handleProjectZipChange(uploadFile) {
     return;
   }
 
+  const uploadToken = ++projectImportToken;
   createSubmitting.value = true;
   try {
     createForm.zipFile = rawFile;
@@ -976,13 +1152,26 @@ async function handleProjectZipChange(uploadFile) {
     }
 
     const { fileId } = await prepareInspectionProjectImport(rawFile);
+    if (uploadToken !== projectImportToken) {
+      try {
+        await deleteImportedFile(fileId);
+      } catch (cleanupError) {
+        console.error('Failed to delete stale imported file:', cleanupError);
+      }
+      return;
+    }
     createForm.importedFileId = fileId;
     ElMessage.success(`工程文件解析并导入成功，FileId：${fileId}`);
   } catch (error) {
-    await clearProjectZip();
+    if (uploadToken !== projectImportToken) {
+      return;
+    }
+    await resetProjectZipState();
     ElMessage.error(error?.message || '工程文件导入失败');
   } finally {
-    createSubmitting.value = false;
+    if (uploadToken === projectImportToken) {
+      createSubmitting.value = false;
+    }
   }
 }
 
@@ -1002,18 +1191,16 @@ async function submitCreateTask() {
 
   createSubmitting.value = true;
   try {
+    const importedFileId = createForm.importedFileId;
     const result = await createInspectionTask({
       projectName: createForm.projectName,
       fileName: createForm.zipFileName,
-      fileId: createForm.importedFileId,
+      fileId: importedFileId,
       deadline: createForm.deadline,
       remark: createForm.remark,
     });
+    preserveImportedFileOnClose = true;
     createDialogVisible.value = false;
-    createForm.projectName = '';
-    createForm.deadline = '';
-    createForm.remark = '';
-    await clearProjectZip();
     await loadTasks();
     ElMessage.success(`任务下发成功，FileId：${result.fileId}`);
   } catch (error) {
@@ -1150,11 +1337,16 @@ watch(
     if (value) {
       await ensureBaseData();
     } else {
+      const shouldPreserveImportedFile = preserveImportedFileOnClose;
+      preserveImportedFileOnClose = false;
       createForm.projectName = '';
       createForm.deadline = '';
       createForm.remark = '';
-      createForm.importedFileId = '';
-      await clearProjectZip();
+      await clearProjectZip({
+        removeImportedFile: !shouldPreserveImportedFile,
+        silent: true,
+        preserveStateOnDeleteFailure: false,
+      });
     }
   }
 );

@@ -349,7 +349,8 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { getOverview } from '@/api/personalCenter';
 
 const props = defineProps({
 	active: Boolean,
@@ -379,19 +380,251 @@ const emit = defineEmits(['enter-module']);
 const statsExpanded = ref(false);
 const statsToggleLabel = computed(() => (statsExpanded.value ? '收起' : '展开'));
 
-const landPriceTasks = [
-	{ id: 'PG-2026-0589', landName: '钱江新城A-12地块', landUse: '住宅用地', price: 28560, evaluateTime: '2026-05-28', status: '待审核', statusKey: 'pending' },
-	{ id: 'PG-2026-0588', landName: '西湖区文三路商业地块', landUse: '商服用地', price: 18200, evaluateTime: '2026-05-27', status: '已完成', statusKey: 'completed' },
-	{ id: 'PG-2026-0587', landName: '滨江高新区工业用地', landUse: '工业用地', price: 4200, evaluateTime: '2026-05-26', status: '已驳回', statusKey: 'rejected' },
-	{ id: 'PG-2026-0586', landName: '余杭区未来科技城C-3', landUse: '住宅用地', price: 24800, evaluateTime: '2026-05-25', status: '已完成', statusKey: 'completed' },
-	{ id: 'PG-2026-0585', landName: '萧山区市北单元地块', landUse: '商住用地', price: 21050, evaluateTime: '2026-05-24', status: '已完成', statusKey: 'completed' },
-	{ id: 'PG-2026-0584', landName: '拱墅区运河新城A-5', landUse: '住宅用地', price: 26500, evaluateTime: '2026-05-23', status: '已驳回', statusKey: 'rejected' },
-	{ id: 'PG-2026-0583', landName: '上城区望江新城B-8', landUse: '商服用地', price: 15800, evaluateTime: '2026-05-22', status: '已完成', statusKey: 'completed' },
-	{ id: 'PG-2026-0582', landName: '临平区乔司商贸地块', landUse: '商服用地', price: 9800, evaluateTime: '2026-05-21', status: '待审核', statusKey: 'pending' },
-	{ id: 'PG-2026-0581', landName: '富阳区银湖科技园', landUse: '工业用地', price: 3800, evaluateTime: '2026-05-20', status: '已完成', statusKey: 'completed' },
-	{ id: 'PG-2026-0580', landName: '桐庐县分水镇住宅地块', landUse: '住宅用地', price: 6500, evaluateTime: '2026-05-19', status: '已完成', statusKey: 'completed' },
-];
+// ==================== 接口数据状态 ====================
+const overviewData = ref(null);
+const overviewLoading = ref(false);
+const overviewError = ref(null);
 
+// 计算属性：从接口数据映射到UI需要的数据格式
+const overviewMetrics = computed(() => {
+	if (!overviewData.value?.summaryCards?.length) {
+		return [
+			{ label: '基准地价平均值', value: '--', trend: '加载中...', trendArrow: '', trendTheme: 'up' },
+			{ label: '监测地块数量', value: '--', trend: '加载中...', trendArrow: '', trendTheme: 'up' },
+			{ label: '评估完成率', value: '--', trend: '加载中...', trendArrow: '', trendTheme: 'up' },
+			{ label: '预警地块数', value: '--', trend: '加载中...', trendArrow: '', trendTheme: 'down' },
+		];
+	}
+	return overviewData.value.summaryCards.map((card) => {
+		let trendTheme = 'up';
+		let trendArrow = '';
+		if (card.trend) {
+			if (card.trend.includes('减少') || card.trend.includes('下降') || card.trend.includes('↓')) {
+				trendTheme = 'down';
+				trendArrow = '↓';
+			} else if (card.trend.includes('增长') || card.trend.includes('增加') || card.trend.includes('提升') || card.trend.includes('↑')) {
+				trendTheme = 'up';
+				trendArrow = '↑';
+			}
+		}
+		return {
+			label: card.label,
+			value: card.value,
+			trend: card.trend || card.hint || '',
+			trendArrow,
+			trendTheme,
+		};
+	});
+});
+
+// 项目状态分布（饼图）
+const landUseDistribution = computed(() => {
+	if (!overviewData.value?.projectStatusDistribution?.length) {
+		return [
+			{ label: '住宅用地', value: 42, color: '#60a5fa' },
+			{ label: '商服用地', value: 28, color: '#34d399' },
+			{ label: '工业用地', value: 18, color: '#fbbf24' },
+			{ label: '商住用地', value: 12, color: '#f472b6' },
+		];
+	}
+	const colors = ['#60a5fa', '#34d399', '#fbbf24', '#f472b6', '#a78bfa', '#f97316'];
+	return overviewData.value.projectStatusDistribution.map((item, index) => ({
+		label: item.name,
+		value: item.percent || Math.round((item.value / overviewData.value.projectStatusDistribution.reduce((sum, i) => sum + i.value, 0)) * 100) || item.value,
+		color: colors[index % colors.length],
+	}));
+});
+
+// 项目趋势数据（折线图和柱状图）
+const projectTrend = computed(() => overviewData.value?.projectTrend || null);
+
+const lineChartPoints = computed(() => {
+	if (!projectTrend.value?.line?.length) {
+		return [
+			{ x: '4', y: '76' },
+			{ x: '20', y: '62' },
+			{ x: '36', y: '46' },
+			{ x: '52', y: '32' },
+			{ x: '68', y: '28' },
+			{ x: '84', y: '44' },
+			{ x: '96', y: '60' },
+		];
+	}
+	const lineData = projectTrend.value.line;
+	const max = Math.max(...lineData);
+	const min = Math.min(...lineData);
+	const range = max - min || 1;
+	const count = lineData.length;
+	const step = 96 / (count - 1);
+	return lineData.map((value, index) => {
+		const normalizedY = 100 - ((value - min) / range) * 80 - 10;
+		return {
+			x: String(Math.round(index * step + 2)),
+			y: String(Math.max(10, Math.min(90, Math.round(normalizedY)))),
+		};
+	});
+});
+
+const chartPoints = computed(() =>
+	lineChartPoints.value.map((p) => `${p.x},${p.y}`).join(' ')
+);
+
+const areaPoints = computed(() => {
+	const pts = lineChartPoints.value.map((p) => `${p.x},${p.y}`);
+	return `0,100 ${pts.join(' ')} 100,100`;
+});
+
+const barChartValues = computed(() => {
+	if (!projectTrend.value?.bars?.length) {
+		return [18, 44, 70, 76, 58, 26];
+	}
+	const bars = projectTrend.value.bars;
+	const max = Math.max(...bars);
+	return bars.map((v) => Math.round((v / max) * 100));
+});
+
+// 雷达图数据 - 综合评估指标（基于日报统计数据计算）
+const radarIndicators = computed(() => {
+	if (overviewData.value?.reportStats) {
+		const stats = overviewData.value.reportStats;
+		return [
+			{ label: '日报提交率', value: Math.min(100, stats.submitRate || 0) },
+			{ label: '已完成项目', value: overviewData.value.projectStatusDistribution?.find((s) => s.name === '已完成')?.percent || 50 },
+			{ label: '进行中项目', value: overviewData.value.projectStatusDistribution?.find((s) => s.name === '进行中')?.percent || 30 },
+			{ label: '待审核项目', value: overviewData.value.projectStatusDistribution?.find((s) => s.name === '待审核')?.percent || 20 },
+			{ label: '数据覆盖', value: 90 },
+		];
+	}
+	return [
+		{ label: '价格准确性', value: 85 },
+		{ label: '评估效率', value: 72 },
+		{ label: '数据覆盖', value: 90 },
+		{ label: '响应速度', value: 68 },
+		{ label: '可视化程度', value: 95 },
+	];
+});
+
+const radarPoints = computed(() => {
+	const center = 50;
+	const radius = 35;
+	const count = radarIndicators.value.length;
+	return radarIndicators.value.map((item, i) => {
+		const angle = (Math.PI * 2 * i) / count - Math.PI / 2;
+		const value = (item.value / 100) * radius;
+		return {
+			x: center + value * Math.cos(angle),
+			y: center + value * Math.sin(angle),
+		};
+	});
+});
+
+const radarPointsStr = computed(() =>
+	radarPoints.value.map((p) => `${p.x},${p.y}`).join(' ')
+);
+
+const getRadarPolygon = (scale) => {
+	const center = 50;
+	const radius = (scale / 100) * 40;
+	const count = radarIndicators.value.length;
+	return radarIndicators.value.map((_, i) => {
+		const angle = (Math.PI * 2 * i) / count - Math.PI / 2;
+		return `${center + radius * Math.cos(angle)},${center + radius * Math.sin(angle)}`;
+	}).join(' ');
+};
+
+// 即将到期项目（表格数据）
+const landPriceTasks = computed(() => {
+	if (!overviewData.value?.upcomingProjects?.length) {
+		return [];
+	}
+	return overviewData.value.upcomingProjects.map((project) => {
+		let statusKey = 'pending';
+		let status = project.status;
+		if (project.status === '已完成') {
+			statusKey = 'completed';
+		} else if (project.status === '已驳回') {
+			statusKey = 'rejected';
+		} else if (project.status === '进行中') {
+			statusKey = 'pending';
+		}
+		return {
+			id: project.id,
+			landName: project.projectName,
+			landUse: project.priority || '普通',
+			price: project.progress || 0,
+			evaluateTime: project.deadline,
+			status: status,
+			statusKey: statusKey,
+		};
+	});
+});
+
+// 统计卡片数据
+const stats = computed(() => {
+	if (!overviewData.value?.reportStats) {
+		return { visits: '--', amount: '--', todayTasks: '--' };
+	}
+	const reportStats = overviewData.value.reportStats;
+	return {
+		visits: overviewData.value.upcomingProjects?.length ? `${overviewData.value.upcomingProjects.length} 项` : '--',
+		amount: reportStats.rangeReportCount ? `${reportStats.rangeReportCount}` : '--',
+		todayTasks: reportStats.todaySubmitted ? `${reportStats.todaySubmitted} 份` : '--',
+	};
+});
+
+// 底部指标卡片（收起状态）
+const metrics = computed(() => {
+	if (!overviewData.value?.reportStats) {
+		return [
+			{ label: '已完成', value: '--', trend: '', trendClass: 'up' },
+			{ label: '未完成', value: '--', trend: '', trendClass: 'flat' },
+			{ label: '任务完成率', value: '--', trend: '', trendClass: 'up' },
+			{ label: '审核中', value: '--', trend: '', trendClass: 'down' },
+		];
+	}
+	const stats = overviewData.value.reportStats;
+	const completed = overviewData.value.projectStatusDistribution?.find((s) => s.name === '已完成')?.value || 0;
+	const pending = overviewData.value.projectStatusDistribution?.find((s) => s.name === '进行中')?.value || 0;
+	const reviewing = overviewData.value.projectStatusDistribution?.find((s) => s.name === '待审核')?.value || 0;
+	const total = completed + pending + reviewing;
+	const completionRate = total > 0 ? Math.round((completed / total) * 100) : 0;
+	return [
+		{ label: '已完成', value: String(completed), trend: `+${completed}`, trendClass: 'up' },
+		{ label: '未完成', value: String(pending), trend: `${pending}`, trendClass: 'flat' },
+		{ label: '任务完成率', value: `${completionRate}%`, trend: `${stats.submitRate || 0}%`, trendClass: 'up' },
+		{ label: '审核中', value: String(reviewing), trend: `${reviewing}`, trendClass: 'down' },
+	];
+});
+
+// ==================== 加载概览数据 ====================
+async function loadOverviewData() {
+	overviewLoading.value = true;
+	overviewError.value = null;
+	try {
+		const data = await getOverview({ range: '7d', trendMode: 'new' });
+		if (data) {
+			overviewData.value = data;
+		}
+	} catch (error) {
+		console.error('加载首页概览数据失败:', error);
+		overviewError.value = error.message || '加载失败';
+	} finally {
+		overviewLoading.value = false;
+	}
+}
+
+// 当 active 变为 true 时重新加载数据
+watch(
+	() => props.active,
+	(newActive) => {
+		if (newActive) {
+			loadOverviewData();
+		}
+	},
+	{ immediate: true }
+);
+
+// ==================== 快捷入口配置 ====================
 const handleViewTask = (task) => {
 	console.log('查看任务:', task.id);
 };
@@ -445,151 +678,16 @@ const entries = [
 	},
 	{
 		key: 'grzx',
-		label: '个人中心',
+		label: '管理中心',
 		desc: '进入个人信息、账户配置与常用设置模块。',
 		shortDesc: '账户配置',
 		icon: grIcon,
 	},
 ];
 
-const stats = {
-	visits: '24,592',
-	amount: '842.5k',
-	todayTasks: '128 项',
-};
+const lineChartSegments = computed(() => buildLineSegments(lineChartPoints.value));
 
-const metrics = [
-	{ label: '已完成', value: '16', trend: '+2', trendClass: 'up' },
-	{ label: '未完成', value: '2', trend: '+2', trendClass: 'flat' },
-	{ label: '任务完成率', value: '89%', trend: '+6%', trendClass: 'up' },
-	{ label: '审核中', value: '3', trend: '-1', trendClass: 'down' },
-];
-
-const overviewMetrics = [
-	{
-		label: '基准地价平均值',
-		value: '¥8,425/m²',
-		trend: '环比增长 2.3%',
-		trendArrow: '↑',
-		trendTheme: 'up',
-		iconText: 'Y',
-		iconTheme: 'blue',
-	},
-	{
-		label: '监测地块数量',
-		value: '1,247',
-		trend: '本月新增 38 个',
-		trendArrow: '↑',
-		trendTheme: 'up',
-		iconText: 'P',
-		iconTheme: 'orange',
-	},
-	{
-		label: '评估完成率',
-		value: '94.7%',
-		trend: '较上月提升 3.2%',
-		trendArrow: '↑',
-		trendTheme: 'up',
-		iconText: 'OK',
-		iconTheme: 'green',
-	},
-	{
-		label: '预警地块数',
-		value: '12',
-		trend: '较上月减少 4 个',
-		trendArrow: '↓',
-		trendTheme: 'down',
-		iconText: '!',
-		iconTheme: 'indigo',
-	},
-];
-
-const lineChartPoints = [
-	{ x: '4', y: '76' },
-	{ x: '20', y: '62' },
-	{ x: '36', y: '46' },
-	{ x: '52', y: '32' },
-	{ x: '68', y: '28' },
-	{ x: '84', y: '44' },
-	{ x: '96', y: '60' },
-];
-
-const chartPoints = computed(() =>
-	lineChartPoints.map((p) => `${p.x},${p.y}`).join(' ')
-);
-
-const areaPoints = computed(() => {
-	const pts = lineChartPoints.map((p) => `${p.x},${p.y}`);
-	return `0,100 ${pts.join(' ')} 100,100`;
-});
-
-// 饼图数据 - 土地用途分布
-const landUseDistribution = [
-	{ label: '住宅用地', value: 42, color: '#60a5fa' },
-	{ label: '商服用地', value: 28, color: '#34d399' },
-	{ label: '工业用地', value: 18, color: '#fbbf24' },
-	{ label: '商住用地', value: 12, color: '#f472b6' },
-];
-
-// 雷达图数据 - 综合评估指标
-const radarIndicators = [
-	{ label: '价格准确性', value: 85 },
-	{ label: '评估效率', value: 72 },
-	{ label: '数据覆盖', value: 90 },
-	{ label: '响应速度', value: 68 },
-	{ label: '可视化程度', value: 95 },
-];
-
-const radarPoints = computed(() => {
-	const center = 50;
-	const radius = 35;
-	const count = radarIndicators.length;
-	return radarIndicators.map((item, i) => {
-		const angle = (Math.PI * 2 * i) / count - Math.PI / 2;
-		const value = (item.value / 100) * radius;
-		return {
-			x: center + value * Math.cos(angle),
-			y: center + value * Math.sin(angle),
-		};
-	});
-});
-
-const radarPointsStr = computed(() =>
-	radarPoints.value.map((p) => `${p.x},${p.y}`).join(' ')
-);
-
-const getRadarPolygon = (scale) => {
-	const center = 50;
-	const radius = (scale / 100) * 40;
-	const count = radarIndicators.length;
-	return radarIndicators.map((_, i) => {
-		const angle = (Math.PI * 2 * i) / count - Math.PI / 2;
-		return `${center + radius * Math.cos(angle)},${center + radius * Math.sin(angle)}`;
-	}).join(' ');
-};
-
-const buildLineSegments = (points) => {
-	return points.slice(0, -1).map((point, index) => {
-		const nextPoint = points[index + 1];
-		const x1 = Number.parseFloat(point.x);
-		const y1 = Number.parseFloat(point.y);
-		const x2 = Number.parseFloat(nextPoint.x);
-		const y2 = Number.parseFloat(nextPoint.y);
-		const dx = x2 - x1;
-		const dy = y2 - y1;
-		const length = Math.sqrt(dx * dx + dy * dy);
-		const angle = Math.atan2(dy, dx);
-		return {
-			left: `${x1}%`,
-			bottom: `${y1}%`,
-			width: `${length}%`,
-			transform: `rotate(${angle}rad)`,
-		};
-	});
-};
-
-const lineChartSegments = buildLineSegments(lineChartPoints);
-const barChartValues = [18, 44, 70, 76, 58, 26];
+// 提醒消息
 const reminders = [
 	{ time: '10:23', source: '数据管理', text: '新增报告已入库' },
 	{ time: '10:22', source: '智能分析', text: '报告分析已完成请查看' },

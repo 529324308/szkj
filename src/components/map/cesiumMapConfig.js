@@ -8,7 +8,7 @@ export const topTabs = [
 	{ key: 'djcx', label: '数治地价' },
 	{ key: 'znfx', label: '智能分析' },
 	{ key: 'sjgl', label: '数据管理' },
-	{ key: 'grzx', label: '个人中心' },
+	{ key: 'grzx', label: '管理中心' },
 ];
 
 export const DEFAULT_MEASURE_FORM = {

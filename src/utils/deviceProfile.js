@@ -91,6 +91,9 @@ function collectWebglInfo(gl, version) {
 			version: '',
 			renderer: '',
 			vendor: '',
+			gpuClass: 'unknown',
+			discreteGpu: false,
+			discreteGpuReason: 'WebGL unavailable',
 			maxTextureSize: 0,
 			maxRenderbufferSize: 0,
 			maxVertexTextureImageUnits: 0,
@@ -107,18 +110,78 @@ function collectWebglInfo(gl, version) {
 		? gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL)
 		: gl.getParameter(gl.VENDOR);
 	const rendererText = String(renderer || '');
+	const vendorText = String(vendor || '');
 	const softwareRenderer = /swiftshader|software|llvmpipe|microsoft basic|mesa offscreen/i.test(rendererText);
+	const gpuClassInfo = classifyGpu(rendererText, vendorText);
 
 	return {
 		supported: true,
 		version,
 		renderer: rendererText,
-		vendor: String(vendor || ''),
+		vendor: vendorText,
+		...gpuClassInfo,
 		maxTextureSize: gl.getParameter(gl.MAX_TEXTURE_SIZE) || 0,
 		maxRenderbufferSize: gl.getParameter(gl.MAX_RENDERBUFFER_SIZE) || 0,
 		maxVertexTextureImageUnits: gl.getParameter(gl.MAX_VERTEX_TEXTURE_IMAGE_UNITS) || 0,
 		antialias: !!gl.getContextAttributes()?.antialias,
 		softwareRenderer,
+	};
+}
+
+function classifyGpu(renderer = '', vendor = '') {
+	const text = `${renderer} ${vendor}`.toLowerCase();
+	if (!text.trim()) {
+		return {
+			gpuClass: 'unknown',
+			discreteGpu: false,
+			discreteGpuReason: 'GPU renderer hidden by browser',
+		};
+	}
+
+	if (/swiftshader|software|llvmpipe|microsoft basic|mesa offscreen/.test(text)) {
+		return {
+			gpuClass: 'software',
+			discreteGpu: false,
+			discreteGpuReason: 'Software renderer',
+		};
+	}
+
+	if (/\b(nvidia|geforce|rtx|gtx|quadro|titan|tesla|nvs)\b/.test(text)) {
+		return {
+			gpuClass: 'discrete',
+			discreteGpu: true,
+			discreteGpuReason: 'NVIDIA discrete renderer detected',
+		};
+	}
+
+	if (/\b(radeon\s+(rx|pro|r9|r7|r5|hd\s?[5-9]\d{3})|firepro|radeon\s+vega\s?(56|64)|\bw\d{4}\b)/.test(text)) {
+		return {
+			gpuClass: 'discrete',
+			discreteGpu: true,
+			discreteGpuReason: 'AMD discrete renderer detected',
+		};
+	}
+
+	if (/\bintel\b.*\barc\b.*\ba\d{3,4}\b/.test(text)) {
+		return {
+			gpuClass: 'discrete',
+			discreteGpu: true,
+			discreteGpuReason: 'Intel Arc discrete renderer detected',
+		};
+	}
+
+	if (/\b(intel|iris|uhd|hd graphics|vega\s?\d+|radeon\(tm\) graphics|radeon graphics|apple|mali|adreno)\b/.test(text)) {
+		return {
+			gpuClass: 'integrated',
+			discreteGpu: false,
+			discreteGpuReason: 'Integrated renderer detected',
+		};
+	}
+
+	return {
+		gpuClass: 'unknown',
+		discreteGpu: false,
+		discreteGpuReason: 'Discrete GPU could not be confirmed',
 	};
 }
 
@@ -383,7 +446,9 @@ function buildProfileSignature(profile) {
 		profile.browser.deviceMemory,
 		profile.browser.devicePixelRatio,
 		profile.webgl.renderer,
+		profile.webgl.vendor,
 		profile.webgl.version,
+		profile.webgl.gpuClass,
 	].join('|');
 }
 
@@ -430,45 +495,46 @@ export function resolveRecommendedMapEngine(profile) {
 	const tier = profile?.benchmark?.tierKey;
 	const webglSupported = profile?.webgl?.supported !== false;
 	if (!webglSupported) return 'openlayers';
+	if (profile?.webgl?.discreteGpu !== true) return 'openlayers';
 	return ['balanced', 'high', 'flagship'].includes(tier) ? 'cesium' : 'openlayers';
 }
 
 export async function collectDeviceProfile(options = {}) {
-	const onProgress = typeof options.onProgress === 'function' ? options.onProgress : () => {};
-	onProgress({ progress: 8, stage: '正在检测浏览器能力' });
-	await wait(120);
-	const browser = collectBrowserInfo();
+  const onProgress = typeof options.onProgress === 'function' ? options.onProgress : () => {};
+  onProgress({ progress: 8, stage: '系统准备中' });
+  await wait(120);
+  const browser = collectBrowserInfo();
 
-	onProgress({ progress: 24, stage: '正在检测 WebGL 渲染能力' });
-	await nextFrame();
-	const { canvas, gl, version } = createWebglContext();
-	const webgl = collectWebglInfo(gl, version);
-	const currentSignature = buildProfileSignature({ browser, webgl });
+  onProgress({ progress: 24, stage: '安全校验中' });
+  await nextFrame();
+  const { canvas, gl, version } = createWebglContext();
+  const webgl = collectWebglInfo(gl, version);
+  const currentSignature = buildProfileSignature({ browser, webgl });
 
 	if (!options.force) {
-		const cached = readCachedProfile();
-		if (cached?.profile && cached?.preset && cached.signature === currentSignature) {
-			releaseWebglContext(gl);
-			onProgress({ progress: 90, stage: '已读取设备档案，正在生成地图版本推荐' });
-			await wait(120);
-			return {
-				...cached,
-				fromCache: true,
+    const cached = readCachedProfile();
+    if (cached?.profile && cached?.preset && cached.signature === currentSignature) {
+      releaseWebglContext(gl);
+      onProgress({ progress: 90, stage: '已读取设备档案，正在生成进入建议' });
+      await wait(120);
+      return {
+        ...cached,
+        fromCache: true,
 			};
 		}
 	}
 
-	onProgress({ progress: 42, stage: '正在执行 CPU 跑分' });
-	const cpu = await runCpuBenchmark(browser.hardwareConcurrency || 2);
+  onProgress({ progress: 42, stage: '智能性能评估中' });
+  const cpu = await runCpuBenchmark(browser.hardwareConcurrency || 2);
 
-	onProgress({ progress: 60, stage: '正在执行 GPU 跑分' });
-	const gpu = await runGpuBenchmark(canvas, gl, webgl);
+  onProgress({ progress: 60, stage: '图形引擎校验中' });
+  const gpu = await runGpuBenchmark(canvas, gl, webgl);
 
-	releaseWebglContext(gl);
+  releaseWebglContext(gl);
 
-	onProgress({ progress: 76, stage: '正在汇总性能档位' });
-	const memoryScore = getMemoryScore(browser.deviceMemory);
-	const browserScore = getBrowserScore(browser, webgl);
+  onProgress({ progress: 76, stage: '正在生成系统画像' });
+  const memoryScore = getMemoryScore(browser.deviceMemory);
+  const browserScore = getBrowserScore(browser, webgl);
 	const totalScore = webgl.supported
 		? clamp(cpu.score * 0.25 + gpu.score * 0.45 + memoryScore * 0.15 + browserScore * 0.15, 0, 100)
 		: 0;
@@ -495,9 +561,9 @@ export async function collectDeviceProfile(options = {}) {
 	};
 	const preset = buildRenderPreset(profile);
 
-	onProgress({ progress: 84, stage: '正在生成地图版本推荐' });
-	await wait(260);
-	onProgress({ progress: 90, stage: '请选择进入的地图版本' });
+  onProgress({ progress: 84, stage: 'AI 智能体激活中' });
+  await wait(260);
+  onProgress({ progress: 90, stage: '进入建议已生成' });
 
 	if (webgl.supported) {
 		writeCachedProfile(profile, preset);

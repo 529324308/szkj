@@ -328,11 +328,20 @@ export async function prepareInspectionProjectImport(zipFile) {
 
   const geojson = await parseLocalShapefileZip(zipFile);
   const { fileId } = await requestImportedFileId(fileName);
-  await importInspectionProjectGeojson({
-    geojson,
-    fileName,
-    fileId,
-  });
+  try {
+    await importInspectionProjectGeojson({
+      geojson,
+      fileName,
+      fileId,
+    });
+  } catch (error) {
+    try {
+      await deleteImportedFile(fileId);
+    } catch (cleanupError) {
+      console.error('Failed to cleanup imported file after import error:', cleanupError);
+    }
+    throw error;
+  }
 
   return {
     fileId,
@@ -797,17 +806,22 @@ function normalizePagedList(items, fallbackKeys = []) {
 
 /**
  * 工程列表分页查询。
- * page、limit 为必传分页参数，其余筛选字段按需传空字符串。
+ * page、limit 为必传分页参数，其余筛选字段按需传空字符串；
+ * isContainTask 传布尔值时会追加到查询串中。
  */
 export async function getImportedFilePage(params = {}) {
-  const query = new URLSearchParams({
+  const queryParams = new URLSearchParams({
     page: String(params.page || 1),
     limit: String(params.limit || 10),
     projectName: String(params.projectName || '').trim(),
     importedUser: String(params.importedUser || '').trim(),
-    importedType: String(params.importedType || '').trim(),
+    importedType: String(params.importedType || 'temp').trim(),
     areaId: String(params.areaId || '').trim(),
-  }).toString();
+  });
+  if (typeof params.isContainTask === 'boolean') {
+    queryParams.set('isContainTask', String(params.isContainTask));
+  }
+  const query = queryParams.toString();
 
   const result = await request(`/api/ImportedFile/page?${query}`, {
     method: 'GET',
@@ -820,6 +834,17 @@ export async function getImportedFilePage(params = {}) {
  * 按工程分页查询任务列表。
  * 需传 fileId，分页参数使用 pageIndex、pageSize。
  */
+export async function deleteImportedFile(id) {
+  const importedFileId = String(id ?? '').trim();
+  if (!importedFileId) {
+    throw new Error('缺少导入文件 ID');
+  }
+
+  return request(`/api/ImportedFile/delete/${encodeURIComponent(importedFileId)}`, {
+    method: 'DELETE',
+  });
+}
+
 export async function getInspectionTaskPagedList(params = {}) {
   const fileId = String(params.fileId || '').trim();
   if (!fileId) {
@@ -837,6 +862,20 @@ export async function getInspectionTaskPagedList(params = {}) {
   });
 
   return normalizePagedList(result, ['data', 'result']);
+}
+
+export async function deleteInspectionTask(taskId) {
+  const normalizedTaskId = String(taskId ?? '').trim();
+  if (!normalizedTaskId) {
+    throw new Error('缂哄皯浠诲姟 ID');
+  }
+  if (!/^-?(?:0|[1-9]\d*)$/.test(normalizedTaskId)) {
+    throw new Error('任务 ID 格式不正确');
+  }
+
+  return request(`/api/Task/${encodeURIComponent(normalizedTaskId)}`, {
+    method: 'DELETE',
+  });
 }
 
 export async function getInspectionTaskList(params = {}) {

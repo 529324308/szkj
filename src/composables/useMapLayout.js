@@ -11,7 +11,7 @@ export function useMapLayout({ activeTopTab, flyToOnLeaveHome, enterHomeScene })
 		{ key: 'djcx', label: '数治地价' },
 		{ key: 'znfx', label: '智能分析' },
 		{ key: 'sjgl', label: '数据管理' },
-		{ key: 'grzx', label: '个人中心' },
+		{ key: 'grzx', label: '管理中心' },
 	];
 	const topTabsEl = ref(null);
 	const indicatorStyle = ref({ left: '0px', width: '0px' });

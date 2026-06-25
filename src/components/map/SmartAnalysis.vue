@@ -336,7 +336,8 @@
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 
-const OLLAMA_BASE_URL = 'http://192.168.1.43:11434';
+const OLLAMA_BASE_URL = 'http://localhost:11434';
+// const OLLAMA_BASE_URL = 'http://192.168.1.43:11434';
 const MODEL_STORAGE_KEY = 'smart-analysis-ollama-model';
 const MODEL_LIST_STORAGE_KEY = 'smart-analysis-ollama-model-list';
 const CHAT_LIST_STORAGE_KEY = 'smart-analysis-ollama-chat-list';

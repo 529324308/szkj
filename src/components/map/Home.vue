@@ -127,7 +127,7 @@
 			</div>
 			<template #tip>
 				<div class="el-upload__tip">
-					仅支持上传包含 shapefile 数据的 `.zip` 文件，解析结果会输出到浏览器控制台
+					仅支持上传包含 shapefile 数据的 `.zip` 文件，且文件大小不能超过 20MB，解析结果会输出到浏览器控制台
 				</div>
 			</template>
 		</el-upload>
@@ -437,7 +437,7 @@
 			</div>
 			<template #tip>
 				<div class="el-upload__tip">
-					仅支持上传 `.kml` / `.kmz` 文件
+					仅支持上传 `.kml` / `.kmz` 文件，且文件大小不能超过 20MB
 				</div>
 			</template>
 		</el-upload>
@@ -739,7 +739,8 @@ const getDefaultCadSpatialForm = () => ({
 	scale: 0,
 });
 const cadSpatialForm = reactive(getDefaultCadSpatialForm());
-const CAD_MAX_SIZE = 20 * 1024 * 1024;
+const LOCAL_IMPORT_MAX_SIZE = 20 * 1024 * 1024;
+const CAD_MAX_SIZE = LOCAL_IMPORT_MAX_SIZE;
 const dxfParser = new DxfParser();
 const cadCoordinateSystemOptions = computed(() => CAD_COORDINATE_SYSTEM_PRESETS[cadSpatialForm.projectionType] || []);
 
@@ -1161,6 +1162,10 @@ const beforeZipUpload = (rawFile) => {
 		ElMessage.error('仅支持上传 .zip 类型文件');
 		return false;
 	}
+	if (Number(rawFile?.size || 0) > LOCAL_IMPORT_MAX_SIZE) {
+		ElMessage.error('SHP 压缩包大小不能超过 20MB');
+		return false;
+	}
 	parsedShpGeojson.value = null;
 	parsedShpName.value = '';
 	parsedShpSourceFileName.value = rawFile?.name || '';
@@ -1274,6 +1279,10 @@ const beforeKmlUpload = (rawFile) => {
 	const isKmz = /\.kmz$/i.test(name);
 	if (!isKml && !isKmz) {
 		ElMessage.error('仅支持上传 .kml / .kmz 类型文件');
+		return false;
+	}
+	if (Number(rawFile?.size || 0) > LOCAL_IMPORT_MAX_SIZE) {
+		ElMessage.error('KML/KMZ 文件大小不能超过 20MB');
 		return false;
 	}
 	parsedKmlFile.value = null;

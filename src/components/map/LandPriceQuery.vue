@@ -454,6 +454,10 @@ function collectDescendants(parentId) {
 
 // 收集所有叶子节点（没有子节点的节点），用于获取数据
 function collectLeafDescendants(parentId) {
+	const nodeId = String(parentId);
+	const directChildren = childrenByParentId.value.get(nodeId) || [];
+	if (directChildren.length === 0) return [nodeId];
+
 	const allDescendants = collectDescendants(parentId);
 	// 过滤出叶子节点（不再有子节点的ID）
 	return allDescendants.filter((id) => {

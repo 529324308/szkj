@@ -8,6 +8,7 @@ import { fromLonLat, toLonLat } from 'ol/proj';
 import {
   angleDegrees,
   bearingDegrees,
+  calculateTriangulatedEarthwork,
   circleToPolygon,
   formatMeasureArea,
   formatMeasureLength,
@@ -15,6 +16,7 @@ import {
   getAreaSqMeters,
   getLengthMeters,
   segmentStatsFromRows,
+  triangulatePointRows,
 } from '../utils/mapGeometry';
 
 const DRAW_SOURCE_KEY = 'measure';
@@ -133,6 +135,7 @@ export function useOpenLayersDrawing(openLayersApi, callbacks = {}) {
     const lengthMeters = resolveLength(toolType, geometry, points);
     const areaSqMeters = resolveArea(toolType, geometry);
     const extra = resolveExtra(toolType, points);
+    const earthwork = toolType === 'measureVolume' ? calculateTriangulatedEarthwork(points) : null;
     const data = {
       ...DEFAULT_MEASURE_FORM,
       ...extra,
@@ -140,13 +143,14 @@ export function useOpenLayersDrawing(openLayersApi, callbacks = {}) {
       segmentsMeters: stats.segmentsMeters,
       cumulativeMeters: stats.cumulativeMeters,
       lengthMeters,
-      areaSqMeters,
+      areaSqMeters: earthwork?.areaSqMeters || areaSqMeters,
       kind,
       name,
       unit: 'auto',
       desc: '',
-      heightMeters: 0,
-      volumeCubicMeters: 0,
+      heightMeters: earthwork?.averageHeightMeters || 0,
+      volumeCubicMeters: earthwork?.volumeCubicMeters || 0,
+      volumeTriangles: earthwork?.triangles || [],
     };
     feature.setId(nextId('measure'));
     feature.setProperties({
@@ -159,6 +163,7 @@ export function useOpenLayersDrawing(openLayersApi, callbacks = {}) {
       measureLabel: buildMeasureLabel(data, geometry),
     });
     feature._measureData = data;
+    if (toolType === 'measureVolume') attachTriangleGrid(feature, points);
     feature._syUserVisible = true;
     feature._syListOrder = ++order;
     callbacks.onCreate?.({ kind: 'measure', feature, data });
@@ -189,12 +194,14 @@ export function useOpenLayersDrawing(openLayersApi, callbacks = {}) {
     if (!feature) return;
     feature._syUserVisible = visible;
     feature.set('visible', visible);
+    feature._volumeGridFeatures?.forEach((gridFeature) => gridFeature.set('visible', visible));
     if (!visible && selectedFeature === feature) clearSelection();
   }
 
   function deleteFeature(feature) {
     if (!feature) return;
     if (selectedFeature === feature) clearSelection();
+    removeTriangleGrid(feature);
     getDrawSource()?.removeFeature(feature);
   }
 
@@ -263,7 +270,12 @@ export function useOpenLayersDrawing(openLayersApi, callbacks = {}) {
         ...feature._measureData,
         ...panelData,
       };
-      next.volumeCubicMeters = (Number(next.areaSqMeters) || 0) * (Number(next.heightMeters) || 0);
+      if (next.kind === 'volume' && Array.isArray(next.volumeTriangles) && next.volumeTriangles.length) {
+        next.volumeCubicMeters = next.volumeTriangles.reduce((sum, triangle) => sum + (Number(triangle.volumeCubicMeters) || 0), 0);
+        next.heightMeters = next.areaSqMeters > 0 ? next.volumeCubicMeters / next.areaSqMeters : 0;
+      } else {
+        next.volumeCubicMeters = (Number(next.areaSqMeters) || 0) * (Number(next.heightMeters) || 0);
+      }
       feature._measureData = next;
       feature.set('name', next.name || feature.get('name'));
       feature.set('label', next.name || feature.get('label'));
@@ -305,6 +317,35 @@ export function useOpenLayersDrawing(openLayersApi, callbacks = {}) {
 
   function getQuerySource() {
     return openLayersApi.getSource?.(QUERY_SOURCE_KEY);
+  }
+
+  function attachTriangleGrid(feature, rows) {
+    removeTriangleGrid(feature);
+    const source = getDrawSource();
+    if (!source || !feature) return;
+    const triangles = triangulatePointRows(rows);
+    feature._volumeGridFeatures = triangles.map((triangle) => {
+      const ring = triangle.points.map((point) => fromLonLat([point.lon, point.lat]));
+      ring.push([...ring[0]]);
+      const gridFeature = new Feature(new Polygon([ring]));
+      gridFeature.setId(nextId('volume-grid'));
+      gridFeature.setProperties({
+        syKind: 'volumeGrid',
+        layerKind: 'measure',
+        visible: feature._syUserVisible !== false,
+        parentMeasureId: feature.getId?.(),
+        selectable: false,
+      });
+      gridFeature._volumeGridFor = feature;
+      source.addFeature(gridFeature);
+      return gridFeature;
+    });
+  }
+
+  function removeTriangleGrid(feature) {
+    const source = getDrawSource();
+    feature?._volumeGridFeatures?.forEach((gridFeature) => source?.removeFeature(gridFeature));
+    if (feature) feature._volumeGridFeatures = [];
   }
 
   function nextId(prefix) {

@@ -189,7 +189,7 @@
 			@inspection-track-hide="handleInspectionTrackHide"
 		/>
 
-		<!-- 6. 个人中心模块 -->
+		<!-- 6. 管理中心模块 -->
 		<PersonalCenter :class="{ 'module-appear': moduleEnterKey === 'grzx' }" :active="activeTopTab === 'grzx'" />
 
 		<!-- 底部显示经纬度 -->
@@ -437,7 +437,8 @@ import { useOpenLayers } from '../composables/useOpenLayers';
 import { useOpenLayersDrawing } from '../composables/useOpenLayersDrawing';
 import { useOpenLayersImports } from '../composables/useOpenLayersImports';
 import { useOpenLayersLandPrice } from '../composables/useOpenLayersLandPrice';
-import { buildOpenLayersKmlPlacemark, safeFileName as safeMapFileName } from '../utils/mapGeometry';
+import { buildOpenLayersKmlPlacemark, calculateTriangulatedEarthwork, safeFileName as safeMapFileName } from '../utils/mapGeometry';
+import { ensurePropertyKeyMapLoaded, mapPropertyNames } from '../utils/propertyKeys';
 import { ElMessage, ElMessageBox } from 'element-plus';
 // import { getLandPriceLayers } from '../api/map';
 
@@ -595,7 +596,7 @@ const topTabs = [
 	{ key: 'djcx', label: '数治地价' },
 	{ key: 'znfx', label: '智能分析' },
 	{ key: 'sjgl', label: '数据管理' },
-	{ key: 'grzx', label: '个人中心' }
+	{ key: 'grzx', label: '管理中心' }
 ];
 const activeTopTab = ref(topTabs[0].key);
 const activeTool = ref(null);
@@ -1693,6 +1694,20 @@ function djcxGetProp(props, keys) {
 	return undefined;
 }
 
+const DJCX_INTERNAL_PROPERTY_KEYS = new Set(['__djcxIndex', '__djcxTotal']);
+
+function djcxBuildMappedProperties(props, matchCount) {
+	const out = mapPropertyNames(props, { skipKeys: DJCX_INTERNAL_PROPERTY_KEYS });
+	if (matchCount != null) out['匹配数量'] = matchCount;
+	return out;
+}
+
+function djcxResolveFeatureTitle(entity, index) {
+	const props = entity?._djcxProperties || {};
+	const value = djcxGetProp(props, ['DKBH', 'dkbh', 'XMMC', 'xmmc', 'NAME', 'name', 'title', 'TITLE', 'id', 'fid']);
+	return String(value || `要素${index + 1}`);
+}
+
 function djcxFormatPercent(value) {
 	if (value == null || value === '') return value;
 	if (typeof value === 'string') {
@@ -1743,69 +1758,11 @@ function djcxFormatDate(value) {
 
 function djcxBuildQueryResultProperties(entity, matchCount) {
 	const props = entity?._djcxProperties || {};
-	const out = {};
-
-	const nodeId = String(entity?._djcxNodeId ?? '');
-	const isNode26Or27 = nodeId === '26' || nodeId === '27';
-	const fields = isNode26Or27
-		? [
-			{ label: '地块编号', keys: ['地块编号', 'DKBH', 'dkbh'] },
-			{ label: '项目名称', keys: ['项目名称', 'XMMC', 'xmmc'] },
-			{ label: '年份', keys: ['年份', 'NF', 'nf', 'YEAR', 'year', 'ND', 'nd', '年度'] },
-			{ label: '土地坐落', keys: ['土地坐落', 'TDZL', 'tdzl', 'ZL', 'zl'] },
-			{ label: '供应方式', keys: ['供应方式', 'GYFS', 'gyfs'] },
-			{ label: '用地批准时间', keys: ['用地批准时间', 'YDPZRQ', 'ydpzrq', 'PZRQ', 'pzrq'] },
-			{ label: '批准文号', keys: ['批准文号', 'PZWH', 'pzwh'] },
-			{ label: '合同取得日期', keys: ['合同取得日期', 'HTQDRQ', 'htqdrq', 'HTRQ', 'htrq'] },
-			{ label: '行业分类', keys: ['行业分类', 'HYFL', 'hyfl'] },
-			{ label: '土地用途', keys: ['土地用途', 'TDYT', 'tdyt', '用途'] },
-			{ label: '供应总面积(平方千米)', keys: ['供应总面积', 'GDZMJ', 'gdzmj', 'ZMJ', 'zmj', 'Shape_Area', 'shape_area'] },
-			{ label: '使用权人', keys: ['使用权人', 'SYQR', 'syqr'] },
-			{ label: '单位面积地价(元/平方米)', keys: ['单位面积地价', 'DWMJDJ', 'dwmjdj'] },
-			{ label: '楼面价(元/平方米)', keys: ['楼面价', 'LMJ', 'lmj', '楼面地价', 'LMDJ', 'lmdj'] },
-			{ label: '成交价(万元)', keys: ['成交价', 'CJJ', 'cjj', 'CJJE', 'cjje'] },
-			{ label: '评估报告编号', keys: ['评估报告编号', 'PGBBH', 'pgbbh', 'PGBH', 'pgbh'] },
-			{ label: '评估时间', keys: ['评估时间', 'PGSJ', 'pgsj'] },
-			{ label: '出让年限', keys: ['出让年限', 'CRNX', 'crnx', 'SYNX', 'synx'] },
-			{ label: '容积率', keys: ['容积率', 'RJL', 'rjl', 'FAR', 'far'] },
-			{ label: '最大容积率', keys: ['最大容积率', 'ZDRJL', 'zdrjl', 'MAXRJL', 'maxrjl'] },
-			{ label: '建筑密度', keys: ['建筑密度', 'JZMD', 'jzmd', 'BUILD_DENS', 'build_dens', 'BUILDING_DENSITY'] },
-		]
-		: [
-			{ label: '行政区代码', keys: ['行政区代码', 'XZQDM', 'xzqdm', 'ADCODE', 'adcode', '行政区划代码', 'XZQ_CODE', 'xzq_code'] },
-			{ label: '行政区名称', keys: ['行政区名称', 'XZQMC', 'xzqmc', 'NAME', 'name', '行政区划名称', 'XZQ_NAME', 'xzq_name'] },
-			{ label: '年份', keys: ['年份', 'YEAR', 'year', 'ND', 'nd', '年度'] },
-			{ label: '地价体系', keys: ['地价体系', 'DJTX', 'djtx', 'PRICE_SYSTEM', 'price_system'] },
-			{ label: '土地用途', keys: ['土地用途', 'TDYT', 'tdyt', 'LAND_USE', 'land_use', '用途'] },
-			{ label: '土地级别', keys: ['土地级别', 'TDJB', 'tdjb', 'LEVEL', 'level', '级别'] },
-			{ label: '级别价(元/平方米)', keys: ['级别价', 'JBJ', 'jbj', 'LEVEL_PRICE', 'level_price', 'JIBIEJIA'] },
-			{ label: '楼面地价(元/平方米)', keys: ['楼面地价', 'LMDJ', 'lmdj', 'FLOOR_PRICE', 'floor_price'] },
-			{ label: '亩地均价(元/亩)', keys: ['亩地均价', 'MDJJ', 'mdjj', 'MU_AVG_PRICE', 'mu_avg_price'] },
-			{ label: '容积率', keys: ['容积率', 'RJL', 'rjl', 'FAR', 'far'] },
-			{ label: '建筑密度', keys: ['建筑密度', 'JZMD', 'jzmd', 'BUILD_DENS', 'build_dens', 'BUILDING_DENSITY'] },
-			{ label: '土地使用年限', keys: ['土地使用年限', 'TDNX', 'tdnx', 'SYNX', 'synx', 'USE_YEARS', 'use_years'] },
-			{ label: '土地开发程度', keys: ['土地开发程度', 'TDKFCD', 'tdkfcd', 'DEVELOP_LEVEL', 'develop_level'] },
-			{ label: '估计期日', keys: ['估计期日', 'GJQR', 'gjqr', 'GJQD', 'gjqd', 'DATE', 'date', '估价期日'] },
-		];
-
-	let hit = false;
-	for (const f of fields) {
-		let v = djcxGetProp(props, f.keys);
-		if (v == null || v === '') continue;
-		if (f.label === '建筑密度') v = djcxFormatPercent(v);
-		if (f.label === '土地使用年限' || f.label === '出让年限') v = djcxFormatYears(v);
-		if (f.label === '用地批准时间' || f.label === '合同取得日期' || f.label === '评估时间' || f.label === '估计期日') v = djcxFormatDate(v);
-		out[f.label] = v;
-		hit = true;
-	}
-
-	if (matchCount != null) out.匹配数量 = matchCount;
-
-	if (hit || matchCount != null) return out;
-	return props;
+	return djcxBuildMappedProperties(props, matchCount);
 }
 
-function djcxShowFeatureInPanel(entity, matchCount) {
+async function djcxShowFeatureInPanel(entity, matchCount) {
+	await ensureDjcxPropertyKeysReady();
 	const centroid = djcxEntityCentroidLonLat(entity);
 	clickInfo.value = {
 		coordinates: centroid,
@@ -1816,16 +1773,13 @@ function djcxShowFeatureInPanel(entity, matchCount) {
 	measurePanelVisible.value = false;
 }
 
-function djcxShowFeaturesInTable(entities, options = {}) {
+async function djcxShowFeaturesInTable(entities, options = {}) {
+	await ensureDjcxPropertyKeysReady();
 	const list = Array.isArray(entities) ? entities.filter(Boolean) : [];
 	if (!list.length) return;
 	const items = list.map((ent) => ({ ent, props: djcxBuildQueryResultProperties(ent) || {} }));
-	const rawNames = items.map((it, idx) => {
-		const p = it.props || {};
-		return String(p.地块编号 || p.项目名称 || `要素${idx + 1}`);
-	});
 	const nameCount = new Map();
-	const colNames = rawNames.map((n) => {
+	const colNames = items.map((it, idx) => djcxResolveFeatureTitle(it.ent, idx)).map((n) => {
 		const k = String(n || '要素');
 		const c = (nameCount.get(k) || 0) + 1;
 		nameCount.set(k, c);
@@ -2073,6 +2027,18 @@ const enterModule = (tabKey) => {
 	}
 };
 
+function preloadDjcxPropertyKeys() {
+	ensureDjcxPropertyKeysReady();
+}
+
+async function ensureDjcxPropertyKeysReady() {
+	try {
+		await ensurePropertyKeyMapLoaded();
+	} catch (error) {
+		console.warn('加载地价要素字段映射失败:', error);
+	}
+}
+
 watch(() => props.homeActive, async (active) => {
 	if (isOpenLayersEngine.value) return;
 	if (!active) {
@@ -2100,6 +2066,7 @@ watch(activeTopTab, async (newVal) => {
 		}
 	}
 	if (newVal === 'djcx') {
+		preloadDjcxPropertyKeys();
 		djcxGongneng.value = true;
 		setDjcxDataSourcesVisible(true);
 	} else {
@@ -2178,7 +2145,10 @@ watch(
 			if (!currentMeasureEntity) return;
 			const areaSqMeters = Number(measureForm.areaSqMeters) || 0;
 			const heightMeters = Number(measureForm.heightMeters) || 0;
-			measureForm.volumeCubicMeters = areaSqMeters > 0 && heightMeters > 0 ? areaSqMeters * heightMeters : 0;
+			const storedTriangles = currentMeasureEntity?._measureData?.volumeTriangles;
+			measureForm.volumeCubicMeters = Array.isArray(storedTriangles) && storedTriangles.length
+				? storedTriangles.reduce((sum, triangle) => sum + (Number(triangle.volumeCubicMeters) || 0), 0)
+				: (areaSqMeters > 0 && heightMeters > 0 ? areaSqMeters * heightMeters : 0);
 			olDrawing?.updateFeatureDataFromPanel?.(currentMeasureEntity, {
 				...measureForm,
 				points: [...lastMeasure.points],
@@ -2214,14 +2184,19 @@ watch(
 		if (!currentMeasureEntity?._measureData) return;
 		const areaSqMeters = Number(measureForm.areaSqMeters) || 0;
 		const heightMeters = Number(measureForm.heightMeters) || 0;
-		const volumeCubicMeters = areaSqMeters > 0 && heightMeters > 0 ? areaSqMeters * heightMeters : 0;
+		const storedTriangles = currentMeasureEntity._measureData.volumeTriangles;
+		const volumeCubicMeters = Array.isArray(storedTriangles) && storedTriangles.length
+			? storedTriangles.reduce((sum, triangle) => sum + (Number(triangle.volumeCubicMeters) || 0), 0)
+			: (areaSqMeters > 0 && heightMeters > 0 ? areaSqMeters * heightMeters : 0);
 		measureForm.volumeCubicMeters = volumeCubicMeters;
 		Object.assign(currentMeasureEntity._measureData, {
 			...currentMeasureEntity._measureData,
 			name: measureForm.name || currentMeasureEntity._measureData.name,
 			unit: measureForm.unit || 'auto',
 			desc: measureForm.desc || '',
-			heightMeters,
+			heightMeters: Array.isArray(storedTriangles) && storedTriangles.length
+				? (currentMeasureEntity._measureData.heightMeters || measureForm.heightMeters || 0)
+				: heightMeters,
 			volumeCubicMeters,
 			points: [...lastMeasure.points],
 			segmentsMeters: [...lastMeasure.segmentsMeters],
@@ -2263,6 +2238,7 @@ let tempEdgeEntity = null;
 let tempDistanceLabel = null;
 let tempAreaLabel = null;
 let tempRadiusEntity = null;
+let tempVolumeGridEntities = [];
 let resultLabel = null;
 let tooltipEntity = null;
 let crosshairX = null; // 新增：经度引导线
@@ -2273,6 +2249,7 @@ let currentMeasurePoints = [];
 let syInfoOrder = 0;
 const positions = [];
 const nameCounters = reactive({ distance: 0, polygon: 0, rect: 0, circle: 0, volume: 0, azimuth: 0, angle: 0, markPoint: 0 });
+const MEASURE_VOLUME_DISPLAY_OFFSET_METERS = 2;
 
 // 响应式提示文字
 const drawingHint = ref('');
@@ -2357,6 +2334,7 @@ function applyMeasureEntityVisibility(entity, visible) {
 	if (entity._measurePoints) entity._measurePoints.forEach((point) => { point.show = visible; });
 	if (entity._measureLabel) entity._measureLabel.show = visible;
 	if (entity._nameLabel) entity._nameLabel.show = visible;
+	if (entity._volumeGridEntities) entity._volumeGridEntities.forEach((gridEntity) => { gridEntity.show = visible; });
 }
 
 function setMeasureEntityVisible(entity, visible) {
@@ -3582,6 +3560,7 @@ function resetDrawing() {
 	djcxQueries.forEach(e => viewer.entities.remove(e));
 
 	// 清除所有临时实体
+	clearTempVolumeGrid(viewer);
 	[tempEntity, tempSolidEntity, tempEdgeEntity, tempDistanceLabel, tempAreaLabel, tempRadiusEntity, resultLabel, tooltipEntity, crosshairX, crosshairY].forEach(ent => {
 		if (ent) viewer.entities.remove(ent);
 	});
@@ -3858,6 +3837,7 @@ function startTool(type) {
 		if (positions.length > 0) {
 			if (!tempEntity) createTempEntity(viewer, type);
 			updateTempEntity(type, hoverCartesian);
+			if (type === 'measureVolume') updateTempVolumeGrid(viewer, [...positions, hoverCartesian]);
 		}
 	}, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
 
@@ -3877,6 +3857,7 @@ function startTool(type) {
 			});
 			if (['dianPolygon', 'dianRect', 'dianCircle'].includes(type)) pt._djcxQuery = true;
 			currentMeasurePoints.push(pt);
+			if (type === 'measureVolume') updateTempVolumeGrid(viewer, positions);
 			
 			// 更新提示文字
 			updateDrawingHint(type, positions.length);
@@ -3953,6 +3934,62 @@ const cartesianToPointInfo = (point) => {
 		height: Number.isFinite(cartographic.height) ? cartographic.height : 0,
 	};
 };
+
+const pointInfoToCartesian = (point, heightOffsetMeters = 0) => Cesium.Cartesian3.fromDegrees(Number(point.lon), Number(point.lat), (Number(point.height) || 0) + heightOffsetMeters);
+
+function offsetCartesianHeight(cartesian, offsetMeters = MEASURE_VOLUME_DISPLAY_OFFSET_METERS) {
+	if (!cartesian || !Number.isFinite(offsetMeters) || offsetMeters === 0) return cartesian;
+	const cartographic = Cesium.Cartographic.fromCartesian(cartesian);
+	return Cesium.Cartesian3.fromRadians(cartographic.longitude, cartographic.latitude, (Number(cartographic.height) || 0) + offsetMeters);
+}
+
+function calculateCesiumEarthwork(cartesians = []) {
+	return calculateTriangulatedEarthwork(cartesians.map(cartesianToPointInfo));
+}
+
+function clearTempVolumeGrid(viewer = getViewer()) {
+	if (viewer) tempVolumeGridEntities.forEach((entity) => entity && viewer.entities.remove(entity));
+	tempVolumeGridEntities = [];
+}
+
+function clearEntityVolumeGrid(entity, viewer = getViewer()) {
+	if (!entity?._volumeGridEntities?.length) return;
+	if (viewer) entity._volumeGridEntities.forEach((gridEntity) => gridEntity && viewer.entities.remove(gridEntity));
+	entity._volumeGridEntities = [];
+}
+
+function createVolumeGridEntities(viewer, triangles = [], options = {}) {
+	if (!viewer || !triangles.length) return [];
+	const transient = options.transient === true;
+	const color = Cesium.Color.fromCssColorString(transient ? '#ffffff' : '#45efff');
+	return triangles.map((triangle) => {
+		const positions3d = triangle.points.map((point) => pointInfoToCartesian(point, MEASURE_VOLUME_DISPLAY_OFFSET_METERS));
+		const outlinePositions = [...positions3d, positions3d[0]];
+		const entity = viewer.entities.add({
+			polyline: {
+				positions: outlinePositions,
+				width: transient ? 1.2 : 1.6,
+				material: new Cesium.PolylineDashMaterialProperty({
+					color: color.withAlpha(transient ? 0.72 : 0.9),
+					dashLength: transient ? 10 : 8,
+				}),
+				depthFailMaterial: color.withAlpha(0.35),
+				disableDepthTestDistance: Number.POSITIVE_INFINITY,
+				classificationType: Cesium.ClassificationType.BOTH,
+			}
+		});
+		entity.name = transient ? 'measure-volume-temp-grid' : 'measure-volume-grid';
+		entity._volumeGrid = true;
+		return entity;
+	});
+}
+
+function updateTempVolumeGrid(viewer, cartesians = []) {
+	clearTempVolumeGrid(viewer);
+	if (!viewer || cartesians.length < 3) return;
+	const earthwork = calculateCesiumEarthwork(cartesians);
+	tempVolumeGridEntities = createVolumeGridEntities(viewer, earthwork.triangles, { transient: true });
+}
 
 const closeRing = (ring) => {
 	if (ring.length === 0) return ring;
@@ -4336,23 +4373,28 @@ function createTempEntity(viewer, type) {
 			tempEntity = viewer.entities.add({
 				polygon: {
 					hierarchy: new CesiumLib.CallbackProperty(() => {
-						if (!hoverCartesian) return new CesiumLib.PolygonHierarchy(positions);
-						return new CesiumLib.PolygonHierarchy([...positions, hoverCartesian]);
+						const pts = hoverCartesian ? [...positions, hoverCartesian] : positions;
+						const displayPts = type === 'measureVolume' ? pts.map((point) => offsetCartesianHeight(point)) : pts;
+						return new CesiumLib.PolygonHierarchy(displayPts);
 					}, false),
 					material: mainColor.withAlpha(fillAlpha),
 					outline: true,
 					outlineColor: mainColor,
-					outlineWidth: 2
+					outlineWidth: 2,
+					disableDepthTestDistance: type === 'measureVolume' ? Number.POSITIVE_INFINITY : undefined,
 				}
 			});
 			tempEdgeEntity = viewer.entities.add({
 				polyline: {
 					positions: new CesiumLib.CallbackProperty(() => {
 						if (!hoverCartesian || positions.length === 0) return [];
-						return [positions[positions.length - 1], hoverCartesian, positions[0]];
+						const edgePoints = [positions[positions.length - 1], hoverCartesian, positions[0]];
+						return type === 'measureVolume' ? edgePoints.map((point) => offsetCartesianHeight(point)) : edgePoints;
 					}, false),
 					width: 2,
-					material: new CesiumLib.PolylineDashMaterialProperty({ color: dashColor, dashLength: 16 })
+					material: new CesiumLib.PolylineDashMaterialProperty({ color: dashColor, dashLength: 16 }),
+					depthFailMaterial: dashColor.withAlpha(0.7),
+					disableDepthTestDistance: type === 'measureVolume' ? Number.POSITIVE_INFINITY : undefined,
 				}
 			});
 			tempAreaLabel = viewer.entities.add({
@@ -4828,20 +4870,26 @@ function finalizeDrawing() {
 		case 'drawPolygon':
 		case 'measureArea':
 		case 'measureVolume': {
+			const polygonDisplayPositions = activeTool.value === 'measureVolume' ? positions.map((point) => offsetCartesianHeight(point)) : [...positions];
 			const polyEntity = viewer.entities.add({
 				polygon: { 
-					hierarchy: new CesiumLib.PolygonHierarchy([...positions]), 
+					hierarchy: new CesiumLib.PolygonHierarchy(polygonDisplayPositions), 
 					material: COLORS.NORMAL.FILL, 
 					outline: true, 
 					outlineColor: COLORS.NORMAL.OUTLINE,
-					outlineWidth: 2
+					outlineWidth: 2,
+					disableDepthTestDistance: activeTool.value === 'measureVolume' ? Number.POSITIVE_INFINITY : undefined,
 				}
 			});
 			currentMeasureEntity = polyEntity;
 			polyEntity._drawn = true;
 			if (positions.length >= 3) {
-				const a = polygonArea(positions);
-				text = a >= 1e6 ? `${(a / 1e6).toFixed(2)} km²` : `${a.toFixed(2)} m²`;
+				const earthwork = activeTool.value === 'measureVolume' ? calculateCesiumEarthwork(positions) : null;
+				const volumeCubicMeters = earthwork?.volumeCubicMeters || 0;
+				const a = earthwork?.areaSqMeters || polygonArea(positions);
+				text = activeTool.value === 'measureVolume'
+					? (volumeCubicMeters >= 1e9 ? `${(volumeCubicMeters / 1e9).toFixed(2)} km³` : `${volumeCubicMeters.toFixed(2)} m³`)
+					: (a >= 1e6 ? `${(a / 1e6).toFixed(2)} km²` : `${a.toFixed(2)} m²`);
 				measureForm.areaSqMeters = a;
 				finalAreaMeters = a;
 				const peri = (pts) => {
@@ -4872,6 +4920,12 @@ function finalizeDrawing() {
 				labelPos = CesiumLib.Cartesian3.fromDegrees(sumLon / positions.length, sumLat / positions.length);
 				const defaultName = autoName(activeTool.value === 'measureVolume' ? 'volume' : 'polygon');
 				measureForm.name = defaultName;
+				if (activeTool.value === 'measureVolume') {
+					measureForm.heightMeters = earthwork?.averageHeightMeters || 0;
+					measureForm.volumeCubicMeters = volumeCubicMeters;
+					clearTempVolumeGrid(viewer);
+					polyEntity._volumeGridEntities = createVolumeGridEntities(viewer, earthwork?.triangles || []);
+				}
 				if (polyEntity) {
 					polyEntity._measureData = { 
 						points: [...lastMeasure.points],
@@ -4883,8 +4937,9 @@ function finalizeDrawing() {
 						name: defaultName, 
 						unit: measureForm.unit || 'auto', 
 						desc: measureForm.desc || '', 
-						heightMeters: measureForm.heightMeters || 0, 
-						volumeCubicMeters: (measureForm.heightMeters || 0) * a 
+						heightMeters: activeTool.value === 'measureVolume' ? (earthwork?.averageHeightMeters || 0) : (measureForm.heightMeters || 0), 
+						volumeCubicMeters: activeTool.value === 'measureVolume' ? volumeCubicMeters : ((measureForm.heightMeters || 0) * a),
+						volumeTriangles: earthwork?.triangles || [],
 					};
 					polyEntity.name = 'measure-polygon';
 					polyEntity._measurePoints = [...currentMeasurePoints];
@@ -5089,6 +5144,7 @@ function finalizeDrawing() {
 	}
 
 	// 移除临时辅助实体
+	clearTempVolumeGrid(viewer);
 	[tempEntity, tempSolidEntity, tempEdgeEntity, tempDistanceLabel, tempAreaLabel, tempRadiusEntity, tooltipEntity, crosshairX, crosshairY].forEach(ent => {
 		if (ent) viewer.entities.remove(ent);
 	});
@@ -5586,6 +5642,7 @@ function watchGlobeReady() {
 }
 
 onMounted(async () => {
+	preloadDjcxPropertyKeys();
 	// 加载地价查询图层
 	// list.value = await getLandPriceLayers();
 
@@ -6688,6 +6745,7 @@ function deleteMeasureEntity(entity) {
 	if (entity._measureLabel) viewer.entities.remove(entity._measureLabel);
 	if (entity._nameLabel) viewer.entities.remove(entity._nameLabel);
 	if (entity._measurePoints) entity._measurePoints.forEach((point) => viewer.entities.remove(point));
+	clearEntityVolumeGrid(entity, viewer);
 	viewer.entities.remove(entity);
 	bumpSyInfoListVersion();
 }
@@ -6865,10 +6923,11 @@ async function clearAllMeasures() {
 		selectedMarkPointEntityId.value = '';
 	}
 	[...viewer.entities.values].forEach(ent => {
-		if (ent._measureData || ent._drawn || ent.name === 'measure-label' || ent.name === 'measure-name-label') {
+		if (ent._measureData || ent._drawn || ent._volumeGrid || ent.name === 'measure-label' || ent.name === 'measure-name-label') {
 			if (ent._measureLabel) viewer.entities.remove(ent._measureLabel);
 			if (ent._nameLabel) viewer.entities.remove(ent._nameLabel);
 			if (ent._measurePoints) ent._measurePoints.forEach(p => viewer.entities.remove(p));
+			clearEntityVolumeGrid(ent, viewer);
 			viewer.entities.remove(ent);
 		}
 		if (ent._syMarkPointData) {

@@ -401,7 +401,7 @@ function resolveRecommendedMapEngine(profile) {
 | `viewer.flyTo` | 自动定位路线 | `view.fit(source extent)` | 可替代 | UI 不变 |
 | `destroy viewer` | 销毁 Cesium Viewer | `map.setTarget(null)` | 可替代 | UI 不变 |
 
-### 6.7 个人中心 `PersonalCenter.vue`
+### 6.7 管理中心 `PersonalCenter.vue`
 
 | 操作 | 当前行为 | OpenLayers 轻量版方案 | 结论 | UI 处理 |
 |---|---|---|---|---|

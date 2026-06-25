@@ -1,0 +1,23 @@
+[
+  {
+    "id": "source-policy-jzbdwf",
+    "name": "zj-natural-resources",
+    "baseUrl": "https://zrzyt.zj.gov.cn",
+    "adapterType": "cheerio-list-detail",
+    "enabled": true,
+    "description": "Phase 1 sample policy source.",
+    "tags": [
+      "natural-resources",
+      "zhejiang"
+    ],
+    "config": {
+      "listUrl": "https://zrzyt.zj.gov.cn/col/col1229098242/index.html",
+      "listSelector": ".default_pgContainer li a",
+      "titleSelector": "h1",
+      "dateSelector": ".time",
+      "contentSelector": ".article-content"
+    },
+    "createdAt": "2026-06-24T03:48:59.872Z",
+    "updatedAt": "2026-06-24T03:48:59.872Z"
+  }
+]

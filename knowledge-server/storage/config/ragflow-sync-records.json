@@ -1,0 +1,41 @@
+[
+  {
+    "id": "ragflow-sync-20260624090258-wppg8x",
+    "documentId": "policy-20260624062928-dhzozy",
+    "datasetKey": "natural_resources_policy",
+    "datasetId": "04444c046faa11f1b8ab71fb85279584",
+    "status": "completed",
+    "action": "uploaded_and_parse_started",
+    "remoteDocumentId": "7f19b6a26fab11f1b8ab71fb85279584",
+    "remoteDocumentName": "信息公开指南(1).md",
+    "message": "Uploaded to RAGFlow and parse was triggered.",
+    "createdAt": "2026-06-24T09:02:58.750Z",
+    "updatedAt": "2026-06-24T09:02:58.821Z"
+  },
+  {
+    "id": "ragflow-sync-20260624090258-3xj8h7",
+    "documentId": "policy-20260624062916-rasvi6",
+    "datasetKey": "natural_resources_policy",
+    "datasetId": "04444c046faa11f1b8ab71fb85279584",
+    "status": "skipped",
+    "action": "garbled_document",
+    "remoteDocumentId": "",
+    "remoteDocumentName": "",
+    "message": "Document looks garbled and was skipped from sync.",
+    "createdAt": "2026-06-24T09:02:58.822Z",
+    "updatedAt": "2026-06-24T09:02:58.822Z"
+  },
+  {
+    "id": "ragflow-sync-20260624090258-3l38h6",
+    "documentId": "policy-20260624052828-5pb0wa",
+    "datasetKey": "natural_resources_policy",
+    "datasetId": "04444c046faa11f1b8ab71fb85279584",
+    "status": "completed",
+    "action": "uploaded_and_parse_started",
+    "remoteDocumentId": "7f2360946fab11f1b8ab71fb85279584",
+    "remoteDocumentName": "2025.md",
+    "message": "Uploaded to RAGFlow and parse was triggered.",
+    "createdAt": "2026-06-24T09:02:58.822Z",
+    "updatedAt": "2026-06-24T09:02:58.878Z"
+  }
+]

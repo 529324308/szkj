@@ -5,6 +5,8 @@ import Point from 'ol/geom/Point';
 import LineString from 'ol/geom/LineString';
 import CircleGeom from 'ol/geom/Circle';
 
+const EARTH_RADIUS_METERS = 6378137;
+
 export function coordinateToLonLat(coordinate) {
 	if (!Array.isArray(coordinate)) return { lon: null, lat: null, height: 0 };
 	const [lon, lat] = toLonLat(coordinate);
@@ -61,6 +63,76 @@ export function geometryToPointRows(geometry) {
 	else if (type === 'Polygon') coordinates = geometry.getCoordinates()?.[0] || [];
 	else if (type === 'Circle') coordinates = circleToPolygon(geometry).getCoordinates()?.[0] || [];
 	return coordinates.map((coordinate) => coordinateToLonLat(coordinate));
+}
+
+export function triangulatePointRows(rows = []) {
+	const cleanRows = normalizePolygonRows(rows);
+	if (cleanRows.length < 3) return [];
+	if (cleanRows.length === 3) return [{ index: 0, points: cleanRows.map((point, sourceIndex) => ({ ...point, role: 'vertex', sourceIndex })) }];
+	const projected = projectRowsToLocalPlane(cleanRows);
+	const indices = projected.map((_, index) => index);
+	if (signedArea2d(projected) < 0) indices.reverse();
+	const triangles = [];
+	let guard = 0;
+	while (indices.length > 3 && guard < cleanRows.length * cleanRows.length) {
+		guard += 1;
+		let earIndex = -1;
+		for (let i = 0; i < indices.length; i += 1) {
+			const prevIndex = indices[(i - 1 + indices.length) % indices.length];
+			const currIndex = indices[i];
+			const nextIndex = indices[(i + 1) % indices.length];
+			if (!isConvex(projected[prevIndex], projected[currIndex], projected[nextIndex])) continue;
+			const hasPointInside = indices.some((candidateIndex) => {
+				if (candidateIndex === prevIndex || candidateIndex === currIndex || candidateIndex === nextIndex) return false;
+				return pointInTriangle(projected[candidateIndex], projected[prevIndex], projected[currIndex], projected[nextIndex]);
+			});
+			if (!hasPointInside) {
+				earIndex = i;
+				triangles.push(buildTriangleRows(cleanRows, [prevIndex, currIndex, nextIndex], triangles.length));
+				break;
+			}
+		}
+		if (earIndex < 0) return triangulatePointRowsByFan(cleanRows);
+		indices.splice(earIndex, 1);
+	}
+	if (indices.length === 3) triangles.push(buildTriangleRows(cleanRows, indices, triangles.length));
+	return triangles;
+}
+
+export function calculateTriangulatedEarthwork(rows = []) {
+	const triangles = triangulatePointRows(rows)
+		.map((triangle) => {
+			const [a, b, c] = triangle.points;
+			const areaSqMeters = heronTriangleAreaMeters(a, b, c);
+			const averageHeightMeters = averageFinite([a.height, b.height, c.height]);
+			const volumeCubicMeters = areaSqMeters * averageHeightMeters;
+			return {
+				...triangle,
+				areaSqMeters,
+				averageHeightMeters,
+				volumeCubicMeters,
+			};
+		})
+		.filter((triangle) => triangle.areaSqMeters > 0);
+	const areaSqMeters = triangles.reduce((sum, triangle) => sum + triangle.areaSqMeters, 0);
+	const volumeCubicMeters = triangles.reduce((sum, triangle) => sum + triangle.volumeCubicMeters, 0);
+	const averageHeightMeters = areaSqMeters > 0 ? volumeCubicMeters / areaSqMeters : 0;
+	return {
+		triangles,
+		areaSqMeters,
+		averageHeightMeters,
+		volumeCubicMeters,
+	};
+}
+
+export function heronTriangleAreaMeters(a, b, c) {
+	const sideA = lonLatDistanceMeters(b, c);
+	const sideB = lonLatDistanceMeters(a, c);
+	const sideC = lonLatDistanceMeters(a, b);
+	if (![sideA, sideB, sideC].every((side) => Number.isFinite(side) && side > 0)) return 0;
+	const p = (sideA + sideB + sideC) / 2;
+	const value = p * (p - sideA) * (p - sideB) * (p - sideC);
+	return value > 0 ? Math.sqrt(value) : 0;
 }
 
 export function segmentStatsFromRows(rows = []) {
@@ -234,4 +306,109 @@ function toRad(value) {
 
 function toDeg(value) {
 	return (Number(value) * 180) / Math.PI;
+}
+
+function normalizePolygonRows(rows = []) {
+	const normalized = rows
+		.map((point) => ({
+			lon: Number(point?.lon),
+			lat: Number(point?.lat),
+			height: Number.isFinite(Number(point?.height)) ? Number(point.height) : 0,
+		}))
+		.filter((point) => Number.isFinite(point.lon) && Number.isFinite(point.lat));
+	if (normalized.length > 1) {
+		const first = normalized[0];
+		const last = normalized[normalized.length - 1];
+		if (Math.abs(first.lon - last.lon) < 1e-12 && Math.abs(first.lat - last.lat) < 1e-12) {
+			normalized.pop();
+		}
+	}
+	return normalized;
+}
+
+function calculateRowsCentroid(rows = []) {
+	const count = rows.length || 1;
+	const summed = rows.reduce((acc, point) => {
+		acc.lon += point.lon;
+		acc.lat += point.lat;
+		acc.height += Number(point.height) || 0;
+		return acc;
+	}, { lon: 0, lat: 0, height: 0 });
+	return {
+		lon: summed.lon / count,
+		lat: summed.lat / count,
+		height: summed.height / count,
+	};
+}
+
+function triangulatePointRowsByFan(rows = []) {
+	const center = calculateRowsCentroid(rows);
+	return rows.map((point, index) => ({
+		index,
+		points: [
+			{ ...center, role: 'center' },
+			{ ...rows[index], role: 'vertex', sourceIndex: index },
+			{ ...rows[(index + 1) % rows.length], role: 'vertex', sourceIndex: (index + 1) % rows.length },
+		],
+	}));
+}
+
+function buildTriangleRows(rows, indices, index) {
+	return {
+		index,
+		points: indices.map((sourceIndex) => ({ ...rows[sourceIndex], role: 'vertex', sourceIndex })),
+	};
+}
+
+function projectRowsToLocalPlane(rows = []) {
+	const center = calculateRowsCentroid(rows);
+	const lat0 = toRad(center.lat);
+	return rows.map((point) => ({
+		...point,
+		x: toRad(point.lon - center.lon) * EARTH_RADIUS_METERS * Math.cos(lat0),
+		y: toRad(point.lat - center.lat) * EARTH_RADIUS_METERS,
+	}));
+}
+
+function signedArea2d(points = []) {
+	let area = 0;
+	for (let i = 0; i < points.length; i += 1) {
+		const a = points[i];
+		const b = points[(i + 1) % points.length];
+		area += (a.x * b.y) - (b.x * a.y);
+	}
+	return area / 2;
+}
+
+function isConvex(a, b, c) {
+	return cross2d(a, b, c) > 1e-9;
+}
+
+function pointInTriangle(point, a, b, c) {
+	const c1 = cross2d(a, b, point);
+	const c2 = cross2d(b, c, point);
+	const c3 = cross2d(c, a, point);
+	return c1 >= -1e-9 && c2 >= -1e-9 && c3 >= -1e-9;
+}
+
+function cross2d(a, b, c) {
+	return ((b.x - a.x) * (c.y - a.y)) - ((b.y - a.y) * (c.x - a.x));
+}
+
+function lonLatDistanceMeters(a, b) {
+	const lon1 = toRad(a?.lon);
+	const lat1 = toRad(a?.lat);
+	const lon2 = toRad(b?.lon);
+	const lat2 = toRad(b?.lat);
+	if (![lon1, lat1, lon2, lat2].every(Number.isFinite)) return 0;
+	const dLat = lat2 - lat1;
+	const dLon = lon2 - lon1;
+	const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
+	return 2 * EARTH_RADIUS_METERS * Math.atan2(Math.sqrt(h), Math.sqrt(Math.max(0, 1 - h)));
+}
+
+function averageFinite(values = []) {
+	const finite = values.map(Number).filter(Number.isFinite);
+	if (!finite.length) return 0;
+	return finite.reduce((sum, value) => sum + value, 0) / finite.length;
 }
