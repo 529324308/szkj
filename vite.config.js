@@ -103,6 +103,13 @@ export default defineConfig({
   server: {
     host: '0.0.0.0', // 允许通过本地网络访问
     https: localHttpsOptions,
+    proxy: {
+      '/knowledge-api': {
+        target: 'http://127.0.0.1:3001',
+        changeOrigin: true,
+        rewrite: (requestPath) => requestPath.replace(/^\/knowledge-api/, '/api'),
+      },
+    },
   },
   preview: {
     host: '0.0.0.0',

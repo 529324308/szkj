@@ -70,6 +70,7 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { login } from '../api/auth';
+import { clearRememberedLogin, getRememberedLogin, saveRememberedLogin } from '../utils/appStorage';
 import FallingPattern from './ui/falling-pattern.vue';
 
 const emit = defineEmits(['success']);
@@ -91,6 +92,13 @@ function onIntroAnimEnd(e) {
 }
 
 onMounted(() => {
+  const rememberedLogin = getRememberedLogin();
+  if (rememberedLogin) {
+    username.value = rememberedLogin.userName;
+    password.value = rememberedLogin.password;
+    rememberMe.value = true;
+  }
+
   introTimer = window.setTimeout(() => {
     introDone.value = true;
     introTimer = null;
@@ -104,8 +112,8 @@ onBeforeUnmount(() => {
 async function onSubmit() {
   if (loading.value) return;
   const u = username.value.trim();
-  const p = password.value.trim();
-  if (!u || !p) {
+  const p = password.value;
+  if (!u || !p.trim()) {
     ElMessage.error({ message: '请输入用户名和密码', offset: MESSAGE_OFFSET_TOP });
     return;
   }
@@ -118,6 +126,12 @@ async function onSubmit() {
     localStorage.setItem('refreshToken', data.refreshToken);
     localStorage.setItem('expiresIn', data.expiresIn);
     localStorage.setItem('userName', u);
+
+    if (rememberMe.value) {
+      saveRememberedLogin(u, p);
+    } else {
+      clearRememberedLogin();
+    }
 
     ElMessage.success({ message: '登录成功', offset: MESSAGE_OFFSET_TOP });
     emit('success', { username: u, ...data });

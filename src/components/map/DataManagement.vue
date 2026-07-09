@@ -16,6 +16,10 @@
       <img class="tool-icon" :src="inspectionIcon" alt="巡检任务" />
       <span>巡检任务</span>
     </button>
+    <button :class="['tool-btn', { active: activeAction === 'knowledgeBase' }]" @click="openKnowledgeBase">
+      <img class="tool-icon" :src="icons.zhineng || inspectionIcon" alt="知识库" />
+      <span>知识库</span>
+    </button>
   </div>
 
   <div v-if="active && activeAction === 'layerManagement'" class="placeholder-card">
@@ -32,6 +36,478 @@
     <div class="placeholder-card__title">本地查看</div>
     <div class="placeholder-card__text">当前重点为巡检任务界面落地，原有本地预览入口保持不变。</div>
   </div>
+
+  <section v-if="active && knowledgePanelVisible" class="knowledge-layout">
+    <el-card class="knowledge-panel" shadow="always">
+      <template #header>
+        <div class="panel-header">
+          <div>
+            <div class="panel-header__title">知识库</div>
+            <div class="panel-header__subtitle">正式索引、上传待入库、聊天临时与网络待审核</div>
+          </div>
+          <div class="panel-header__actions">
+            <el-button type="primary" :loading="knowledgeImporting" @click="openKnowledgeFileImport">导入文件</el-button>
+            <el-button :loading="knowledgeImporting" @click="openKnowledgeFolderImport">导入文件夹</el-button>
+            <el-button @click="refreshKnowledgePanel">刷新</el-button>
+            <el-button @click="closeKnowledgePanel">关闭</el-button>
+            <input
+              ref="knowledgeFileInputRef"
+              class="knowledge-import-input"
+              type="file"
+              multiple
+              @change="handleKnowledgeImportChange"
+            />
+            <input
+              ref="knowledgeFolderInputRef"
+              class="knowledge-import-input"
+              type="file"
+              webkitdirectory
+              directory
+              multiple
+              @change="handleKnowledgeImportChange"
+            />
+          </div>
+        </div>
+      </template>
+
+      <el-tabs v-model="knowledgeTab" class="knowledge-tabs" @tab-change="handleKnowledgeTabChange">
+        <el-tab-pane label="正式索引" name="formal">
+          <el-alert
+            v-if="knowledgeImportSummary"
+            class="knowledge-import-summary"
+            type="success"
+            show-icon
+            :closable="true"
+            title="已上传到待入库"
+            :description="knowledgeImportSummary"
+            @close="knowledgeImportSummary = ''"
+          />
+          <div class="knowledge-index-toolbar">
+            <div>
+              <div class="knowledge-section-title">正式索引文件</div>
+              <div class="cell-sub">这里仅显示 GraphRAG / Neo4j 全链路完成的文件；处理中和失败状态保留在上传待入库。</div>
+            </div>
+            <el-button type="primary" :loading="indexJobCreating" @click="createManualGraphIndexJob">
+              手动触发全量重建
+            </el-button>
+          </div>
+          <div class="knowledge-browse-grid knowledge-browse-grid--files-only">
+            <div class="knowledge-document-table">
+              <div class="knowledge-section-title">正式知识库文件列表</div>
+              <el-table v-loading="documentLoading" :data="knowledgeDocuments" border height="100%">
+                <el-table-column label="文件" min-width="260">
+                  <template #default="{ row }">
+                    <div class="cell-title">{{ row.title || row.originalName || row.fileName || row.id }}</div>
+                    <div class="cell-sub">{{ row.relativePath || row.fileName || row.id }}</div>
+                    <div class="cell-sub">ID：{{ row.id }}</div>
+                  </template>
+                </el-table-column>
+                <el-table-column label="入图状态" width="130" align="center">
+                  <template #default="{ row }">
+                    <el-tag :type="knowledgeGraphStatusType(row.graphStatus)" effect="plain">
+                      {{ knowledgeGraphStatusLabel(row.graphStatus) }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="来源" min-width="150" show-overflow-tooltip>
+                  <template #default="{ row }">{{ row.sourceOrg || row.sourceName || row.parser || '--' }}</template>
+                </el-table-column>
+                <el-table-column label="入库时间" width="180">
+                  <template #default="{ row }">{{ formatDateTime(row.approvedAt || row.createdAt) }}</template>
+                </el-table-column>
+                <el-table-column label="操作" width="160" fixed="right">
+                  <template #default="{ row }">
+                    <el-button link type="primary" @click="showKnowledgeDocumentInfo(row)">详情</el-button>
+                    <el-button
+                      link
+                      type="danger"
+                      :loading="deletingDocumentId === row.id"
+                      @click="confirmDeleteKnowledgeDocument(row)"
+                    >
+                      删除
+                    </el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </div>
+          </div>
+        </el-tab-pane>
+
+        <el-tab-pane label="上传待入库" name="pending">
+          <div class="knowledge-index-toolbar">
+            <div>
+              <div class="knowledge-section-title">上传待入库</div>
+              <div class="cell-sub">这里的文件已上传但尚未进入正式知识库；手动入库或每天 00:00 自动入库后，会执行解析、转 Markdown、写入 stateStore、生成 Passage / Relation，并启动 GraphRAG / Neo4j；全链路完成后才进入正式索引。</div>
+            </div>
+            <div class="knowledge-toolbar-actions">
+              <el-button
+                type="primary"
+                :disabled="!pendingStagingItems.some((item) => item.stagingStatus === 'uploaded_pending') || Boolean(stagingActionId)"
+                :loading="stagingActionId === 'ingest-all'"
+                @click="ingestAllPendingStagingItems"
+              >
+                一键入库
+              </el-button>
+              <el-button
+                :disabled="pendingStagingItems.length < 2 || Boolean(stagingActionId)"
+                :loading="stagingActionId === 'dedupe'"
+                @click="openDedupeDialog('pending')"
+              >
+                一键查重
+              </el-button>
+            </div>
+          </div>
+          <div v-if="pendingIngestProgress" class="knowledge-ingest-progress">
+            <div class="knowledge-ingest-progress__head">
+              <span>{{ pendingIngestProgress.message }}</span>
+              <span>{{ pendingIngestProgress.percentage }}%</span>
+            </div>
+            <el-progress
+              :percentage="pendingIngestProgress.percentage"
+              :status="pendingIngestProgress.status === 'active' ? '' : pendingIngestProgress.status"
+              :stroke-width="10"
+              striped
+              striped-flow
+            />
+          </div>
+          <div class="knowledge-document-table knowledge-document-table--fill">
+            <el-table v-loading="stagingLoading" :data="pendingStagingItems" border height="100%">
+              <el-table-column label="文件" min-width="300">
+                <template #default="{ row }">
+                  <div class="cell-title">{{ row.originalName || row.fileName || row.id }}</div>
+                  <div class="cell-sub">{{ row.relativePath || row.id }}</div>
+                  <div class="cell-sub">ID：{{ row.id }}</div>
+                </template>
+              </el-table-column>
+              <el-table-column label="状态" width="120" align="center">
+                <template #default="{ row }">
+                  <el-tag :type="stagingStatusType(row.stagingStatus)" effect="plain">
+                    {{ stagingStatusLabel(row.stagingStatus) }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="大小" width="120" align="right">
+                <template #default="{ row }">{{ formatFileSize(row.size) }}</template>
+              </el-table-column>
+              <el-table-column label="上传人" min-width="130" show-overflow-tooltip>
+                <template #default="{ row }">{{ row.uploadedBy || '--' }}</template>
+              </el-table-column>
+              <el-table-column label="上传时间" width="180">
+                <template #default="{ row }">{{ formatDateTime(row.uploadedAt || row.createdAt) }}</template>
+              </el-table-column>
+              <el-table-column label="操作" width="180" fixed="right">
+                <template #default="{ row }">
+                  <el-button
+                    link
+                    type="primary"
+                    :disabled="row.stagingStatus !== 'uploaded_pending'"
+                    :loading="stagingActionId === row.id"
+                    @click="ingestStagingItem(row)"
+                  >
+                    入库
+                  </el-button>
+                  <el-button link type="primary" @click="showStagingItemInfo(row)">详情</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+        </el-tab-pane>
+
+        <el-tab-pane label="聊天临时" name="chat">
+          <div class="knowledge-index-toolbar">
+            <div>
+              <div class="knowledge-section-title">聊天临时文件</div>
+              <div class="cell-sub">这里的文件已解析但只服务当前对话和历史追问；一键上传只会批量加入上传待入库，不会直接解析成正式知识库。</div>
+            </div>
+            <div class="knowledge-toolbar-actions">
+              <el-button
+                type="primary"
+                :disabled="!chatTemporaryDocuments.length || Boolean(chatTemporaryActionId)"
+                :loading="chatTemporaryActionId === 'stage-all'"
+                @click="stageAllChatTemporaryDocuments"
+              >
+                一键上传
+              </el-button>
+              <el-button
+                :disabled="chatTemporaryDocuments.length < 2 || Boolean(chatTemporaryActionId)"
+                :loading="chatTemporaryActionId === 'dedupe'"
+                @click="openDedupeDialog('chat')"
+              >
+                一键查重
+              </el-button>
+            </div>
+          </div>
+          <div class="knowledge-document-table knowledge-document-table--fill">
+            <el-table v-loading="chatTemporaryLoading" :data="chatTemporaryDocuments" border height="100%">
+              <el-table-column label="文件" min-width="300">
+                <template #default="{ row }">
+                  <div class="cell-title">{{ row.title || row.originalName || row.fileName || row.id }}</div>
+                  <div class="cell-sub">{{ row.relativePath || row.fileName || row.id }}</div>
+                  <div class="cell-sub">ID：{{ row.id }}</div>
+                </template>
+              </el-table-column>
+              <el-table-column label="解析状态" width="130" align="center">
+                <template #default="{ row }">
+                  <el-tag :type="knowledgeDocumentStatusType(row.inventoryStatus || row.status)" effect="plain">
+                    {{ knowledgeDocumentStatusLabel(row.inventoryStatus || row.status) }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="上传时间" width="180">
+                <template #default="{ row }">{{ formatDateTime(row.createdAt || row.convertedAt) }}</template>
+              </el-table-column>
+              <el-table-column label="操作" width="260" fixed="right">
+                <template #default="{ row }">
+                  <el-button link type="primary" @click="showKnowledgeDocumentInfo(row)">详情</el-button>
+                  <el-button
+                    link
+                    type="success"
+                    :loading="chatTemporaryActionId === `stage:${row.id}`"
+                    @click="stageChatTemporaryDocument(row)"
+                  >
+                    上传到待入库
+                  </el-button>
+                  <el-button
+                    link
+                    type="danger"
+                    :loading="chatTemporaryActionId === `remove:${row.id}`"
+                    @click="removeChatTemporaryFile(row)"
+                  >
+                    移除
+                  </el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+        </el-tab-pane>
+
+        <el-tab-pane label="网络待审核" name="network">
+          <div class="knowledge-review-head">
+            <el-radio-group v-model="reviewStatusFilter" size="small" @change="loadReviewPolicies">
+              <el-radio-button label="">全部</el-radio-button>
+              <el-radio-button label="pending_review">未审核</el-radio-button>
+              <el-radio-button label="approved">已通过</el-radio-button>
+              <el-radio-button label="rejected">未通过</el-radio-button>
+              <el-radio-button label="duplicate">重复</el-radio-button>
+            </el-radio-group>
+            <div class="knowledge-review-count">共 {{ reviewPolicies.length }} 条</div>
+          </div>
+          <div class="knowledge-document-table knowledge-document-table--fill">
+          <el-table v-loading="reviewLoading" :data="reviewPolicies" border height="100%">
+            <el-table-column label="资料" min-width="280">
+              <template #default="{ row }">
+                <div class="cell-title">{{ row.title || '未命名资料' }}</div>
+                <div class="cell-sub">{{ row.sourceOrg || row.sourceName || '未知来源' }}</div>
+              </template>
+            </el-table-column>
+            <el-table-column label="状态" width="120" align="center">
+              <template #default="{ row }">
+                <el-tag :type="reviewStatusType(row.reviewStatus)" effect="dark">{{ reviewStatusLabel(row.reviewStatus) }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="审核人" min-width="130">
+              <template #default="{ row }">{{ row.reviewer?.name || getLastReviewer(row)?.name || '--' }}</template>
+            </el-table-column>
+            <el-table-column label="审核记录" min-width="220">
+              <template #default="{ row }">
+                <div v-if="getLastReviewLog(row)" class="cell-sub">
+                  {{ reviewActionLabel(getLastReviewLog(row).action) }} · {{ formatDateTime(getLastReviewLog(row).createdAt) }}
+                </div>
+                <div v-else class="cell-sub">暂无记录</div>
+              </template>
+            </el-table-column>
+            <el-table-column label="来源类型" width="130" align="center">
+              <template #default="{ row }">
+                <el-tag :type="sourceTrustType(row.sourceTrust)" effect="plain">{{ sourceTrustLabel(row.sourceTrust) }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="sourceUrl" label="公开来源" min-width="260" show-overflow-tooltip />
+            <el-table-column label="操作" width="220" fixed="right">
+              <template #default="{ row }">
+                <el-button link type="primary" @click="openKnowledgeReview(row)">查看</el-button>
+                <el-button
+                  v-if="row.reviewStatus === 'pending_review' || row.reviewStatus === 'rejected'"
+                  link
+                  type="success"
+                  :loading="reviewActionId === row.id"
+                  @click="submitKnowledgeReview(row, 'approve')"
+                >
+                  通过
+                </el-button>
+                <el-button
+                  v-if="row.reviewStatus === 'pending_review' || row.reviewStatus === 'approved'"
+                  link
+                  type="danger"
+                  :loading="reviewActionId === row.id"
+                  @click="openKnowledgeReject(row)"
+                >
+                  不通过
+                </el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+          </div>
+        </el-tab-pane>
+      </el-tabs>
+    </el-card>
+  </section>
+
+  <el-dialog
+    v-model="knowledgeImportPreviewVisible"
+    title="上传到待入库预览"
+    width="860px"
+    append-to-body
+    :close-on-click-modal="!knowledgeImporting"
+    :close-on-press-escape="!knowledgeImporting"
+    :show-close="!knowledgeImporting"
+  >
+    <div class="knowledge-import-preview-head">
+      <span>待导入 {{ knowledgeImportPendingFiles.length }} 个文件</span>
+      <span>总大小 {{ formatFileSize(knowledgeImportTotalSize) }}</span>
+    </div>
+    <el-alert
+      class="knowledge-import-summary"
+      type="warning"
+      show-icon
+      :closable="false"
+      title="上传只会进入临时数据库和“上传待入库”，不会立即成为 AI 可用的正式知识库。"
+      description="后续需要手动点击入库，或等待每天 00:00 自动入库；完成解析和 GraphRAG / Neo4j 索引后才会进入正式索引。"
+    />
+    <el-table :data="knowledgeImportPendingFiles" border height="420">
+      <el-table-column label="文件" min-width="320">
+        <template #default="{ row }">
+          <div class="cell-title">{{ row.name }}</div>
+          <div class="cell-sub">{{ row.relativePath }}</div>
+        </template>
+      </el-table-column>
+      <el-table-column label="类型" width="90" align="center">
+        <template #default="{ row }">
+          <el-tag effect="plain">{{ row.extension || '文件' }}</el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column label="大小" width="120" align="right">
+        <template #default="{ row }">{{ formatFileSize(row.size) }}</template>
+      </el-table-column>
+      <el-table-column label="操作" width="90" align="center">
+        <template #default="{ row }">
+          <el-button link type="danger" :disabled="knowledgeImporting" @click="removeKnowledgeImportFile(row)">删除</el-button>
+        </template>
+      </el-table-column>
+    </el-table>
+    <template #footer>
+      <el-button :disabled="knowledgeImporting" @click="clearKnowledgeImportPendingFiles">取消</el-button>
+      <el-button
+        type="primary"
+        :disabled="!knowledgeImportPendingFiles.length"
+        :loading="knowledgeImporting"
+        @click="confirmKnowledgeImport"
+      >
+        上传到待入库
+      </el-button>
+    </template>
+  </el-dialog>
+
+  <el-dialog
+    v-model="knowledgeImportProgressVisible"
+    title="正在导入知识库"
+    width="620px"
+    append-to-body
+    :close-on-click-modal="false"
+    :close-on-press-escape="false"
+    :show-close="false"
+  >
+    <div class="knowledge-import-progress">
+      <el-progress
+        :percentage="Math.max(0, Math.min(100, Number(knowledgeImportJob?.progress || 0)))"
+        :stroke-width="14"
+        :status="knowledgeImportJob?.status === 'failed' ? 'exception' : undefined"
+      />
+      <div class="knowledge-import-progress__message">{{ knowledgeImportJob?.message || '正在处理导入任务。' }}</div>
+      <el-descriptions :column="2" border size="small">
+        <el-descriptions-item label="阶段">{{ knowledgeImportJob?.stage || '--' }}</el-descriptions-item>
+        <el-descriptions-item label="总文件">{{ knowledgeImportJob?.totalFiles ?? 0 }}</el-descriptions-item>
+        <el-descriptions-item label="待解析">{{ knowledgeImportJob?.activeFiles ?? 0 }}</el-descriptions-item>
+        <el-descriptions-item label="重复跳过">{{ knowledgeImportJob?.duplicateFilesCount ?? 0 }}</el-descriptions-item>
+        <el-descriptions-item label="已解析">{{ knowledgeImportJob?.parsedFiles ?? 0 }}</el-descriptions-item>
+        <el-descriptions-item label="已入库">{{ knowledgeImportJob?.approvedFiles ?? 0 }}</el-descriptions-item>
+        <el-descriptions-item label="当前文件" :span="2">{{ knowledgeImportJob?.currentFile || '--' }}</el-descriptions-item>
+      </el-descriptions>
+      <div v-if="knowledgeImportJob?.duplicateFiles?.length" class="knowledge-import-duplicates">
+        <div class="knowledge-section-title">重复文件已跳过</div>
+        <div v-for="item in knowledgeImportJob.duplicateFiles.slice(0, 5)" :key="item.contentHash" class="cell-sub">
+          {{ item.relativePath || item.originalName }}：{{ item.reason }}
+        </div>
+      </div>
+    </div>
+  </el-dialog>
+
+  <el-dialog
+    v-model="dedupeDialogVisible"
+    :title="dedupeDialogTitle"
+    width="920px"
+    append-to-body
+    :close-on-click-modal="!dedupeSubmitting"
+    :close-on-press-escape="!dedupeSubmitting"
+    :show-close="!dedupeSubmitting"
+  >
+    <div class="knowledge-import-summary">
+      将剔除下列重复文件。点击“保留”可把文件从剔除清单中移除。
+    </div>
+    <el-table :data="dedupeCandidates" border height="420">
+      <el-table-column label="将剔除的文件" min-width="320">
+        <template #default="{ row }">
+          <div class="cell-title">{{ row.title || row.originalName || row.fileName || row.id }}</div>
+          <div class="cell-sub">{{ row.relativePath || row.fileName || row.id }}</div>
+        </template>
+      </el-table-column>
+      <el-table-column label="保留依据" min-width="280">
+        <template #default="{ row }">
+          <div class="cell-title">{{ row.keepTitle || row.keepOriginalName || row.keepId }}</div>
+          <div class="cell-sub">与该文件内容重复</div>
+        </template>
+      </el-table-column>
+      <el-table-column label="状态" width="110" align="center">
+        <template #default="{ row }">
+          <el-tag effect="plain">{{ row.statusLabel }}</el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column label="操作" width="90" align="center">
+        <template #default="{ row }">
+          <el-button link type="primary" :disabled="dedupeSubmitting" @click="keepDedupeCandidate(row)">保留</el-button>
+        </template>
+      </el-table-column>
+    </el-table>
+    <template #footer>
+      <el-button :disabled="dedupeSubmitting" @click="dedupeDialogVisible = false">取消</el-button>
+      <el-button
+        type="primary"
+        :disabled="!dedupeCandidates.length"
+        :loading="dedupeSubmitting"
+        @click="confirmDedupeRemoval"
+      >
+        确认剔除 {{ dedupeCandidates.length }} 个
+      </el-button>
+    </template>
+  </el-dialog>
+
+  <el-dialog
+    v-model="knowledgeDocumentPreviewVisible"
+    :title="knowledgeDocumentPreviewTitle"
+    width="920px"
+    append-to-body
+    class="knowledge-document-preview-dialog"
+  >
+    <div v-loading="knowledgeDocumentPreviewLoading" class="knowledge-document-preview">
+      <div class="knowledge-document-preview__meta">
+        <span>{{ knowledgeDocumentPreviewMeta.sourceOrg || knowledgeDocumentPreviewMeta.sourceName || 'knowledge' }}</span>
+        <span v-if="knowledgeDocumentPreviewMeta.graphStatus">图谱状态：{{ knowledgeGraphStatusLabel(knowledgeDocumentPreviewMeta.graphStatus) }}</span>
+        <span v-if="knowledgeDocumentPreviewMeta.updatedAt || knowledgeDocumentPreviewMeta.createdAt">
+          {{ formatDateTime(knowledgeDocumentPreviewMeta.updatedAt || knowledgeDocumentPreviewMeta.createdAt) }}
+        </span>
+      </div>
+      <pre class="knowledge-document-preview__content">{{ knowledgeDocumentPreviewContent || '暂无可预览内容' }}</pre>
+    </div>
+  </el-dialog>
 
   <section v-if="active && inspectionPanelVisible" class="inspection-layout">
     <el-card class="inspection-panel" shadow="always">
@@ -396,6 +872,84 @@
     </template>
   </el-dialog>
 
+  <el-dialog v-model="knowledgeReviewDialogVisible" :title="knowledgeReviewDialogTitle" width="860px" append-to-body>
+    <template v-if="selectedReviewPolicy">
+      <el-descriptions :column="2" border>
+        <el-descriptions-item label="标题">{{ selectedReviewPolicy.title || '未命名资料' }}</el-descriptions-item>
+        <el-descriptions-item label="状态">
+          <el-tag :type="reviewStatusType(selectedReviewPolicy.reviewStatus)" effect="dark">{{ reviewStatusLabel(selectedReviewPolicy.reviewStatus) }}</el-tag>
+        </el-descriptions-item>
+        <el-descriptions-item label="来源">{{ selectedReviewPolicy.sourceOrg || selectedReviewPolicy.sourceName || '--' }}</el-descriptions-item>
+        <el-descriptions-item label="来源类型">
+          <el-tag :type="sourceTrustType(selectedReviewPolicy.sourceTrust)" effect="plain">{{ sourceTrustLabel(selectedReviewPolicy.sourceTrust) }}</el-tag>
+        </el-descriptions-item>
+        <el-descriptions-item label="发布时间">{{ selectedReviewPolicy.publishDate || '--' }}</el-descriptions-item>
+        <el-descriptions-item label="匹配政策" :span="2">{{ selectedReviewPolicy.matchedPolicyName || '--' }}</el-descriptions-item>
+        <el-descriptions-item label="公开地址" :span="2">
+          <a v-if="selectedReviewPolicy.sourceUrl" :href="selectedReviewPolicy.sourceUrl" target="_blank" rel="noopener noreferrer">{{ selectedReviewPolicy.sourceUrl }}</a>
+          <span v-else>--</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="AI验证" :span="2">
+          {{ selectedReviewPolicy.validation?.reason || selectedReviewPolicy.sourceTrustReason || '--' }}
+        </el-descriptions-item>
+        <el-descriptions-item label="摘要" :span="2">{{ selectedReviewPolicy.summary || '--' }}</el-descriptions-item>
+      </el-descriptions>
+
+      <el-divider content-position="left">文件内容</el-divider>
+      <div v-loading="selectedReviewPolicyContentLoading" class="knowledge-review-content">
+        <pre v-if="selectedReviewPolicyContent">{{ selectedReviewPolicyContent }}</pre>
+        <el-empty v-else description="暂无可预览正文" />
+      </div>
+
+      <el-divider content-position="left">审核记录</el-divider>
+      <el-timeline v-if="selectedReviewPolicy.reviewHistory?.length">
+        <el-timeline-item
+          v-for="record in selectedReviewPolicy.reviewHistory"
+          :key="record.id"
+          :timestamp="formatDateTime(record.createdAt)"
+        >
+          <div class="knowledge-review-log-title">{{ reviewActionLabel(record.action) }} · {{ record.reviewer?.name || '--' }}</div>
+          <div class="cell-sub">{{ record.note || '无审核意见' }}</div>
+        </el-timeline-item>
+      </el-timeline>
+      <el-empty v-else description="暂无审核记录" />
+
+      <el-form v-if="selectedReviewPolicy.reviewStatus !== 'duplicate'" class="review-form" @submit.prevent>
+        <el-form-item label="审核意见" label-width="90px">
+          <el-input
+            ref="knowledgeReviewNoteRef"
+            v-model.trim="knowledgeReviewNote"
+            type="textarea"
+            :rows="4"
+            :placeholder="knowledgeReviewMode === 'reject' ? '请填写审核不通过原因' : '通过可选填，不通过请填写原因'"
+          />
+        </el-form-item>
+        <div v-if="knowledgeReviewMode === 'reject' && !knowledgeReviewNote.trim()" class="knowledge-review-required-tip">
+          审核不通过必须填写原因，填写后即可提交。
+        </div>
+      </el-form>
+    </template>
+    <template #footer>
+      <el-button @click="knowledgeReviewDialogVisible = false">关闭</el-button>
+      <el-button
+        v-if="selectedReviewPolicy?.reviewStatus === 'pending_review' || selectedReviewPolicy?.reviewStatus === 'approved'"
+        type="danger"
+        :disabled="!knowledgeReviewNote.trim() || reviewActionId === selectedReviewPolicy.id"
+        @click="submitKnowledgeReview(selectedReviewPolicy, 'reject')"
+      >
+        审核不通过
+      </el-button>
+      <el-button
+        v-if="selectedReviewPolicy?.reviewStatus === 'pending_review' || selectedReviewPolicy?.reviewStatus === 'rejected'"
+        type="primary"
+        :loading="reviewActionId === selectedReviewPolicy.id"
+        @click="submitKnowledgeReview(selectedReviewPolicy, 'approve')"
+      >
+        审核通过
+      </el-button>
+    </template>
+  </el-dialog>
+
   <InspectionPlaybackWindow
     v-model="playbackPanelVisible"
     :track="playbackTrack"
@@ -427,6 +981,23 @@ import {
   resetInspectionTaskMockData,
   reviewInspectionTaskRoute,
 } from '../../api/inspectionTask';
+import {
+  approveReviewPolicy,
+  createGraphRagIndexJob,
+  deleteKnowledgeDocument,
+  deleteKnowledgeStagingItem,
+  getGraphRagIndexJobs,
+  getKnowledgeDocumentPreview,
+  getKnowledgeDocuments,
+  getKnowledgeStagingItems,
+  getReviewPolicies,
+  getReviewPolicyContent,
+  ingestKnowledgeStagingItems,
+  removeChatTemporaryDocument,
+  rejectReviewPolicy,
+  stageKnowledgeDocumentsFromSource,
+  uploadKnowledgeStagingFiles,
+} from '../../api/knowledge';
 
 const props = defineProps({
   active: Boolean,
@@ -547,6 +1118,47 @@ const reviewForm = reactive({
 });
 
 const inspectionPanelVisible = ref(false);
+const knowledgePanelVisible = ref(false);
+const knowledgeTab = ref('formal');
+const documentLoading = ref(false);
+const knowledgeDocuments = ref([]);
+const pendingStagingItems = ref([]);
+const chatTemporaryDocuments = ref([]);
+const graphIndexJobs = ref([]);
+const stagingLoading = ref(false);
+const chatTemporaryLoading = ref(false);
+const stagingActionId = ref('');
+const chatTemporaryActionId = ref('');
+const dedupeDialogVisible = ref(false);
+const dedupeSubmitting = ref(false);
+const dedupeMode = ref('');
+const dedupeCandidates = ref([]);
+const deletingDocumentId = ref('');
+const indexJobCreating = ref(false);
+const reviewLoading = ref(false);
+const reviewPolicies = ref([]);
+const reviewStatusFilter = ref('pending_review');
+const reviewActionId = ref('');
+const knowledgeFileInputRef = ref(null);
+const knowledgeFolderInputRef = ref(null);
+const knowledgeImporting = ref(false);
+const knowledgeImportSummary = ref('');
+const knowledgeImportPreviewVisible = ref(false);
+const knowledgeImportPendingFiles = ref([]);
+const knowledgeImportProgressVisible = ref(false);
+const knowledgeImportJob = ref(null);
+const knowledgeDocumentPreviewVisible = ref(false);
+const knowledgeDocumentPreviewLoading = ref(false);
+const knowledgeDocumentPreviewTitle = ref('知识库文件内容');
+const knowledgeDocumentPreviewContent = ref('');
+const knowledgeDocumentPreviewMeta = ref({});
+const knowledgeReviewDialogVisible = ref(false);
+const selectedReviewPolicy = ref(null);
+const selectedReviewPolicyContent = ref('');
+const selectedReviewPolicyContentLoading = ref(false);
+const knowledgeReviewNote = ref('');
+const knowledgeReviewMode = ref('view');
+const knowledgeReviewNoteRef = ref(null);
 const detailPanelVisible = ref(false);
 const playbackPanelVisible = ref(false);
 const playbackLoading = ref(false);
@@ -556,8 +1168,70 @@ const playbackRoute = ref(null);
 const playbackProgress = ref(0);
 const trackPlaying = ref(false);
 let playbackTimer = null;
+let knowledgeImportPollTimer = null;
+let pendingIngestPollTimer = null;
 
 const flatTaskList = computed(() => projectList.value.flatMap((project) => project.tasks || []));
+const knowledgeImportTotalSize = computed(() => knowledgeImportPendingFiles.value.reduce((total, item) => total + (item.size || 0), 0));
+const knowledgeReviewDialogTitle = computed(() => (knowledgeReviewMode.value === 'reject' ? '审核不通过' : '知识库资料审核'));
+const dedupeDialogTitle = computed(() => (dedupeMode.value === 'chat' ? '聊天临时一键查重' : '上传待入库一键查重'));
+const activeGraphJobStatuses = new Set(['queued', 'running']);
+const failedGraphJobStatuses = new Set(['failed']);
+const graphJobMap = computed(() => new Map(graphIndexJobs.value.map((job) => [job.id, job])));
+function graphJobStatusForItem(item) {
+  const job = item?.graphIndexJobId ? graphJobMap.value.get(item.graphIndexJobId) : null;
+  return String(job?.status || '').toLowerCase();
+}
+function isActivePendingIngestItem(item) {
+  const status = String(item?.stagingStatus || '').toLowerCase();
+  const jobStatus = graphJobStatusForItem(item);
+  if (['importing', 'indexing', 'index_failed'].includes(status)) return true;
+  if (status !== 'imported') return false;
+  return activeGraphJobStatuses.has(jobStatus) || failedGraphJobStatuses.has(jobStatus);
+}
+const pendingIngestItems = computed(() => pendingStagingItems.value.filter(isActivePendingIngestItem));
+const pendingIngestProgress = computed(() => {
+  const items = pendingIngestItems.value;
+  if (!items.length) return null;
+  const jobIds = [...new Set(items.map((item) => item.graphIndexJobId).filter(Boolean))];
+  const jobs = graphIndexJobs.value.filter((job) => jobIds.includes(job.id));
+  const failedCount = items.filter((item) => {
+    const status = String(item.stagingStatus || '').toLowerCase();
+    return status === 'index_failed' || failedGraphJobStatuses.has(graphJobStatusForItem(item));
+  }).length;
+  const importingCount = items.filter((item) => String(item.stagingStatus || '').toLowerCase() === 'importing').length;
+  const indexingCount = items.filter((item) => {
+    const status = String(item.stagingStatus || '').toLowerCase();
+    if (status === 'indexing') return true;
+    return status === 'imported' && activeGraphJobStatuses.has(graphJobStatusForItem(item));
+  }).length;
+  const runningJobs = jobs.filter((job) => activeGraphJobStatuses.has(String(job.status || '').toLowerCase()));
+  const failedJobs = jobs.filter((job) => failedGraphJobStatuses.has(String(job.status || '').toLowerCase()));
+  const completedJobs = jobs.filter((job) => String(job.status || '').toLowerCase() === 'completed');
+  let percentage = 8;
+  if (jobs.length) {
+    percentage = Math.round(jobs.reduce((sum, job) => sum + (Number(job.progress) || 0), 0) / jobs.length);
+  } else if (importingCount) {
+    percentage = 25;
+  } else if (indexingCount) {
+    percentage = 65;
+  }
+  if (failedCount || failedJobs.length) percentage = Math.max(percentage, 100);
+  const active = importingCount > 0 || indexingCount > 0 || runningJobs.length > 0;
+  return {
+    total: items.length,
+    importingCount,
+    indexingCount,
+    failedCount,
+    jobCount: jobs.length,
+    completedJobCount: completedJobs.length,
+    status: failedCount || failedJobs.length ? 'exception' : (active ? 'active' : 'success'),
+    percentage: Math.max(0, Math.min(100, percentage)),
+    message: failedCount || failedJobs.length
+      ? `有 ${failedCount || failedJobs.length} 项入库失败，请查看列表状态`
+      : `正在检测入库链路：解析中 ${importingCount}，建图中 ${indexingCount}，任务 ${runningJobs.length || jobs.length}`
+  };
+});
 const playbackMax = computed(() => Math.max(0, (playbackTrack.value?.points?.length || 1) - 1));
 const awaitingReviewCount = computed(() => flatTaskList.value.filter((task) => task.routes?.some((route) => route.status === 'AWAITING_REVIEW')).length);
 const completedTaskCount = computed(() => flatTaskList.value.filter((task) => task.status === 'COMPLETED').length);
@@ -565,6 +1239,9 @@ const completedTaskCount = computed(() => flatTaskList.value.filter((task) => ta
 function setActiveAction(action) {
   if (inspectionPanelVisible.value && action !== 'inspectionTask') {
     closeInspectionPanel({ preserveActiveAction: true });
+  }
+  if (knowledgePanelVisible.value && action !== 'knowledgeBase') {
+    closeKnowledgePanel({ preserveActiveAction: true });
   }
   activeAction.value = action;
 }
@@ -648,6 +1325,1007 @@ function openInspectionTasks() {
   inspectionPanelVisible.value = true;
   selectedTaskId.value = '';
   loadTasks();
+}
+
+function openKnowledgeBase() {
+  if (knowledgePanelVisible.value && activeAction.value === 'knowledgeBase') {
+    closeKnowledgePanel();
+    return;
+  }
+  activeAction.value = 'knowledgeBase';
+  knowledgePanelVisible.value = true;
+  refreshKnowledgePanel();
+}
+
+function closeKnowledgePanel(options = {}) {
+  const { preserveActiveAction = false } = options;
+  knowledgePanelVisible.value = false;
+  stopPendingIngestPolling();
+  knowledgeReviewDialogVisible.value = false;
+  selectedReviewPolicy.value = null;
+  knowledgeReviewMode.value = 'view';
+  if (!preserveActiveAction && activeAction.value === 'knowledgeBase') {
+    activeAction.value = '';
+  }
+}
+
+function handleKnowledgeTabChange() {
+  if (knowledgeTab.value !== 'pending') {
+    stopPendingIngestPolling();
+  }
+  refreshKnowledgePanel();
+}
+
+async function refreshKnowledgePanel() {
+  if (knowledgeTab.value === 'formal') {
+    await loadKnowledgeDocuments();
+  } else if (knowledgeTab.value === 'pending') {
+    await loadPendingStagingItems();
+  } else if (knowledgeTab.value === 'chat') {
+    await loadChatTemporaryDocuments();
+  } else if (knowledgeTab.value === 'network') {
+    await loadReviewPolicies();
+  }
+}
+
+function openKnowledgeFileImport() {
+  if (knowledgeImporting.value) return;
+  if (knowledgeFileInputRef.value) {
+    knowledgeFileInputRef.value.value = '';
+    knowledgeFileInputRef.value.click();
+  }
+}
+
+function openKnowledgeFolderImport() {
+  if (knowledgeImporting.value) return;
+  if (knowledgeFolderInputRef.value) {
+    knowledgeFolderInputRef.value.value = '';
+    knowledgeFolderInputRef.value.click();
+  }
+}
+
+function handleKnowledgeImportChange(event) {
+  const input = event?.target;
+  const files = Array.from(input?.files || []);
+  if (input) {
+    input.value = '';
+  }
+  if (!files.length) return;
+
+  knowledgeImportPendingFiles.value = files.map((file, index) => ({
+    id: `${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
+    file,
+    name: file.name,
+    relativePath: file.webkitRelativePath || file.name,
+    size: file.size,
+    type: file.type || '',
+    extension: getFileExtension(file.name)
+  }));
+  knowledgeImportPreviewVisible.value = true;
+}
+
+function removeKnowledgeImportFile(row) {
+  knowledgeImportPendingFiles.value = knowledgeImportPendingFiles.value.filter((item) => item.id !== row.id);
+  if (!knowledgeImportPendingFiles.value.length) {
+    knowledgeImportPreviewVisible.value = false;
+  }
+}
+
+function clearKnowledgeImportPendingFiles() {
+  knowledgeImportPendingFiles.value = [];
+  knowledgeImportPreviewVisible.value = false;
+}
+
+async function confirmKnowledgeImport() {
+  const pendingFiles = [...knowledgeImportPendingFiles.value];
+  if (!pendingFiles.length || knowledgeImporting.value) return;
+
+  knowledgeImporting.value = true;
+  knowledgeImportSummary.value = '';
+  knowledgeImportPreviewVisible.value = false;
+  knowledgeImportProgressVisible.value = false;
+  knowledgeImportJob.value = {
+    status: 'queued',
+    stage: 'queued',
+    progress: 0,
+    totalFiles: pendingFiles.length,
+    activeFiles: pendingFiles.length,
+    duplicateFilesCount: 0,
+    parsedFiles: 0,
+    approvedFiles: 0,
+    currentFile: '',
+    message: '正在上传文件到临时数据库。'
+  };
+  try {
+    const response = await uploadKnowledgeStagingFiles({
+      files: pendingFiles.map((item) => item.file),
+      relativePaths: pendingFiles.map((item) => item.relativePath),
+      reviewer: getCurrentReviewer(),
+    });
+    const summary = response?.summary || {};
+    knowledgeImportSummary.value = formatKnowledgeStagingSummary(summary);
+    ElMessage.success(knowledgeImportSummary.value || '上传成功，已进入上传待入库；尚未解析，AI 暂不可作为正式知识库使用');
+    knowledgeTab.value = 'pending';
+    await loadPendingStagingItems();
+  } catch (error) {
+    ElMessage.error(error?.message || '知识库文件导入失败');
+  } finally {
+    knowledgeImportPendingFiles.value = [];
+    knowledgeImporting.value = false;
+    knowledgeImportProgressVisible.value = false;
+  }
+}
+
+function startKnowledgeImportPolling(jobId) {
+  stopKnowledgeImportPolling();
+  pollKnowledgeImportJob(jobId);
+  knowledgeImportPollTimer = window.setInterval(() => {
+    pollKnowledgeImportJob(jobId);
+  }, 1200);
+}
+
+function stopKnowledgeImportPolling() {
+  if (knowledgeImportPollTimer) {
+    window.clearInterval(knowledgeImportPollTimer);
+    knowledgeImportPollTimer = null;
+  }
+}
+
+async function pollKnowledgeImportJob(jobId) {
+  return jobId;
+}
+
+function formatKnowledgeImportSummary(summary = {}) {
+  return [
+    `共选择 ${summary.totalFiles ?? 0} 个文件`,
+    summary.duplicateFiles ? `跳过重复 ${summary.duplicateFiles} 个` : '',
+    `成功解析 ${summary.parsedFiles ?? 0} 个`,
+    `自动入库 ${summary.approvedFiles ?? 0} 个`,
+    `已加入图谱索引队列 ${summary.graphIndexed ?? summary.indexedFiles ?? 0} 个`,
+    summary.unsupportedFiles ? `不支持 ${summary.unsupportedFiles} 个` : '',
+    summary.failedFiles ? `失败 ${summary.failedFiles} 个` : '',
+  ].filter(Boolean).join('，');
+}
+
+function formatKnowledgeStagingSummary(summary = {}) {
+  return [
+    `共选择 ${summary.totalFiles ?? 0} 个文件`,
+    `进入上传待入库 ${summary.uploadedFiles ?? 0} 个`,
+    summary.duplicateFiles ? `重复 ${summary.duplicateFiles} 个` : '',
+    summary.failedFiles ? `失败 ${summary.failedFiles} 个` : '',
+    '尚未解析，尚未进入正式知识库'
+  ].filter(Boolean).join('，');
+}
+
+function normalizeDedupeText(value = '') {
+  return String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 6000);
+}
+
+function getDedupeKey(item = {}, mode = '') {
+  if (item.contentHash) return `hash:${item.contentHash}`;
+  if (mode === 'chat') {
+    const text = normalizeDedupeText(item.previewContent || '');
+    if (text.length >= 20) return `preview:${text.length}:${text}`;
+  }
+  const name = String(item.originalName || item.fileName || item.title || '').trim().toLowerCase();
+  const size = Number(item.size) || 0;
+  if (name && size > 0) return `name-size:${name}:${size}`;
+  return '';
+}
+
+function buildDedupeCandidates(items = [], mode = '') {
+  const groups = new Map();
+  const candidates = [];
+  for (const item of items) {
+    if (mode === 'pending' && item.stagingStatus === 'duplicate') {
+      candidates.push({
+        ...item,
+        keepId: item.duplicateOf || '已有文件',
+        keepTitle: item.duplicateOf || '已有文件',
+        keepOriginalName: item.duplicateOf || '已有文件',
+        statusLabel: stagingStatusLabel(item.stagingStatus)
+      });
+      continue;
+    }
+    const key = getDedupeKey(item, mode);
+    if (!key) continue;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(item);
+  }
+
+  for (const group of groups.values()) {
+    if (group.length <= 1) continue;
+    const keep = group.find((item) => item.stagingStatus !== 'duplicate') || group[0];
+    for (const item of group) {
+      if (item.id === keep.id) continue;
+      candidates.push({
+        ...item,
+        keepId: keep.id,
+        keepTitle: keep.title || keep.originalName || keep.fileName || keep.id,
+        keepOriginalName: keep.originalName || keep.fileName || keep.title || keep.id,
+        statusLabel: mode === 'pending'
+          ? stagingStatusLabel(item.stagingStatus)
+          : knowledgeDocumentStatusLabel(item.inventoryStatus || item.status)
+      });
+    }
+  }
+
+  const seen = new Set();
+  return candidates.filter((item) => {
+    if (!item.id || seen.has(item.id)) return false;
+    seen.add(item.id);
+    return true;
+  });
+}
+
+function openDedupeDialog(mode) {
+  const items = mode === 'chat' ? chatTemporaryDocuments.value : pendingStagingItems.value;
+  const candidates = buildDedupeCandidates(items, mode);
+  if (!candidates.length) {
+    ElMessage.success('当前列表没有发现可剔除的重复文件');
+    return;
+  }
+  dedupeMode.value = mode;
+  dedupeCandidates.value = candidates;
+  dedupeDialogVisible.value = true;
+}
+
+function keepDedupeCandidate(row = {}) {
+  dedupeCandidates.value = dedupeCandidates.value.filter((item) => item.id !== row.id);
+}
+
+async function confirmDedupeRemoval() {
+  const candidates = [...dedupeCandidates.value];
+  if (!candidates.length || dedupeSubmitting.value) return;
+  dedupeSubmitting.value = true;
+  const mode = dedupeMode.value;
+  try {
+    if (mode === 'chat') {
+      chatTemporaryActionId.value = 'dedupe';
+      for (const item of candidates) {
+        await removeChatTemporaryDocument(item.id);
+      }
+      await loadChatTemporaryDocuments();
+    } else {
+      stagingActionId.value = 'dedupe';
+      for (const item of candidates) {
+        await deleteKnowledgeStagingItem(item.id);
+      }
+      await loadPendingStagingItems();
+    }
+    ElMessage.success(`已剔除 ${candidates.length} 个重复文件`);
+    dedupeDialogVisible.value = false;
+    dedupeCandidates.value = [];
+  } catch (error) {
+    ElMessage.error(error?.message || '重复文件剔除失败');
+  } finally {
+    dedupeSubmitting.value = false;
+    stagingActionId.value = '';
+    chatTemporaryActionId.value = '';
+  }
+}
+
+function getFileExtension(fileName = '') {
+  const index = String(fileName || '').lastIndexOf('.');
+  return index >= 0 ? String(fileName).slice(index + 1).toLowerCase() : '';
+}
+
+function formatFileSize(size = 0) {
+  const value = Number(size) || 0;
+  if (value >= 1024 * 1024 * 1024) return `${(value / 1024 / 1024 / 1024).toFixed(2)} GB`;
+  if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(2)} MB`;
+  if (value >= 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${value} B`;
+}
+
+async function loadKnowledgeDocuments() {
+  documentLoading.value = true;
+  try {
+    const response = await getKnowledgeDocuments({ bucket: 'formal' });
+    knowledgeDocuments.value = Array.isArray(response?.items) ? response.items : [];
+  } catch (error) {
+    knowledgeDocuments.value = [];
+    ElMessage.error(error?.message || '上传文件列表加载失败');
+  } finally {
+    documentLoading.value = false;
+  }
+}
+
+async function loadGraphIndexJobs() {
+  try {
+    const response = await getGraphRagIndexJobs();
+    graphIndexJobs.value = Array.isArray(response?.items) ? response.items : [];
+  } catch {
+    graphIndexJobs.value = [];
+  }
+}
+
+function stopPendingIngestPolling() {
+  if (pendingIngestPollTimer) {
+    window.clearInterval(pendingIngestPollTimer);
+    pendingIngestPollTimer = null;
+  }
+}
+
+function syncPendingIngestPolling() {
+  const shouldPoll = knowledgePanelVisible.value &&
+    knowledgeTab.value === 'pending' &&
+    pendingIngestItems.value.some((item) => {
+      const status = String(item.stagingStatus || '').toLowerCase();
+      return status === 'importing' ||
+        status === 'indexing' ||
+        (status === 'imported' && activeGraphJobStatuses.has(graphJobStatusForItem(item)));
+    });
+  if (!shouldPoll) {
+    stopPendingIngestPolling();
+    return;
+  }
+  if (pendingIngestPollTimer) return;
+  pendingIngestPollTimer = window.setInterval(() => {
+    loadPendingStagingItems({ silent: true });
+  }, 3000);
+}
+
+async function loadPendingStagingItems(options = {}) {
+  const silent = Boolean(options.silent);
+  if (!silent) stagingLoading.value = true;
+  try {
+    const [response] = await Promise.all([
+      getKnowledgeStagingItems({ bucket: 'pending' }),
+      loadGraphIndexJobs(),
+    ]);
+    pendingStagingItems.value = Array.isArray(response?.items) ? response.items : [];
+    syncPendingIngestPolling();
+  } catch (error) {
+    pendingStagingItems.value = [];
+    stopPendingIngestPolling();
+    if (!silent) ElMessage.error(error?.message || '上传待入库列表加载失败');
+  } finally {
+    if (!silent) stagingLoading.value = false;
+  }
+}
+
+async function loadChatTemporaryDocuments() {
+  chatTemporaryLoading.value = true;
+  try {
+    const response = await getKnowledgeDocuments({ bucket: 'chat' });
+    chatTemporaryDocuments.value = Array.isArray(response?.items) ? response.items : [];
+  } catch (error) {
+    chatTemporaryDocuments.value = [];
+    ElMessage.error(error?.message || '聊天临时文件加载失败');
+  } finally {
+    chatTemporaryLoading.value = false;
+  }
+}
+
+function knowledgeDocumentStatusLabel(status = '') {
+  switch (status) {
+    case 'approved':
+      return '已入库';
+    case 'converted':
+      return '已转换';
+    case 'chat_uploaded':
+      return '聊天临时';
+    case 'chat_upload':
+      return '聊天临时';
+    case 'chat_upload_needs_review':
+      return '需复核';
+    case 'pending_review':
+      return '待审核';
+    case 'duplicate':
+      return '重复跳过';
+    case 'rejected':
+      return '已驳回';
+    case 'parsing':
+      return '解析中';
+    case 'parsed':
+      return '已解析';
+    case 'ai_extract_failed':
+      return 'AI抽取失败';
+    case 'parse_failed':
+    case 'failed':
+      return '解析失败';
+    case 'unsupported':
+      return '不支持';
+    default:
+      return status || '待处理';
+  }
+}
+
+function knowledgeGraphStatusLabel(status = '') {
+  switch (status) {
+    case 'pending_graph':
+      return '待建图';
+    case 'indexing':
+      return '建图中';
+    case 'graph_built':
+    case 'indexed':
+      return '已建图';
+    case 'index_failed':
+      return '建图失败';
+    case 'not_indexed':
+      return '未建图';
+    default:
+      return status || '--';
+  }
+}
+
+function knowledgeGraphStatusType(status = '') {
+  switch (status) {
+    case 'graph_built':
+    case 'indexed':
+      return 'success';
+    case 'pending_graph':
+    case 'indexing':
+      return 'warning';
+    case 'index_failed':
+      return 'danger';
+    default:
+      return 'info';
+  }
+}
+
+function stagingStatusLabel(status = '') {
+  switch (status) {
+    case 'uploaded_pending':
+      return '已上传';
+    case 'importing':
+      return '解析中';
+    case 'indexing':
+      return '建图中';
+    case 'index_failed':
+      return '建图失败';
+    case 'imported':
+      return '等待建图';
+    case 'duplicate':
+      return '重复';
+    case 'failed':
+      return '失败';
+    case 'needs_review':
+      return '需复核';
+    default:
+      return status || '待处理';
+  }
+}
+
+function stagingStatusType(status = '') {
+  switch (status) {
+    case 'uploaded_pending':
+    case 'importing':
+    case 'indexing':
+    case 'imported':
+      return 'warning';
+    case 'duplicate':
+      return 'info';
+    case 'failed':
+    case 'needs_review':
+    case 'index_failed':
+      return 'danger';
+    default:
+      return 'info';
+  }
+}
+
+function knowledgeDocumentStatusType(status = '') {
+  switch (status) {
+    case 'approved':
+      return 'success';
+    case 'pending_review':
+    case 'parsing':
+    case 'parsed':
+      return 'warning';
+    case 'duplicate':
+    case 'unsupported':
+      return 'info';
+    case 'rejected':
+    case 'ai_extract_failed':
+    case 'parse_failed':
+    case 'failed':
+      return 'danger';
+    default:
+      return 'info';
+  }
+}
+
+function buildKnowledgeDocumentMetaText(row = {}) {
+  return [
+    `文件：${row.title || row.originalName || row.fileName || row.id || '--'}`,
+    `文档 ID：${row.id || '--'}`,
+    row.documentId ? `正式文档 ID：${row.documentId}` : '',
+    row.reviewCandidateId ? `审核记录 ID：${row.reviewCandidateId}` : '',
+    row.parseRunId ? `解析任务 ID：${row.parseRunId}` : '',
+    `来源：${row.sourceOrg || row.sourceName || row.parser || '--'}`,
+    `状态：${knowledgeDocumentStatusLabel(row.status || row.inventoryStatus)}`,
+    `入图状态：${row.graphStatus || '--'}`,
+    `时间：${formatDateTime(row.approvedAt || row.createdAt || row.updatedAt)}`,
+    row.error ? `错误：${row.error}` : '',
+    row.sourceUrl ? `公开地址：${row.sourceUrl}` : '',
+  ].filter(Boolean).join('\n');
+}
+
+async function showKnowledgeDocumentInfo(row = {}) {
+  if (!row?.id) return;
+  knowledgeDocumentPreviewTitle.value = row.title || row.originalName || row.fileName || row.id || '知识库文件内容';
+  knowledgeDocumentPreviewMeta.value = row;
+  knowledgeDocumentPreviewContent.value = '';
+  knowledgeDocumentPreviewVisible.value = true;
+  knowledgeDocumentPreviewLoading.value = true;
+  try {
+    const response = await getKnowledgeDocumentPreview(row.id);
+    const previewContent = String(response?.preview?.content || response?.content || row.previewContent || '').trim();
+    knowledgeDocumentPreviewMeta.value = {
+      ...row,
+      ...(response?.item || {}),
+    };
+    knowledgeDocumentPreviewContent.value = previewContent || [
+      buildKnowledgeDocumentMetaText(row),
+      '',
+      '暂无可预览内容。'
+    ].join('\n');
+  } catch (error) {
+    knowledgeDocumentPreviewContent.value = [
+      buildKnowledgeDocumentMetaText(row),
+      '',
+      `预览加载失败：${error?.message || '未知错误'}`
+    ].join('\n');
+  } finally {
+    knowledgeDocumentPreviewLoading.value = false;
+  }
+}
+
+function showStagingItemInfo(row = {}) {
+  const content = [
+    `文件：${row.originalName || row.fileName || row.id || '--'}`,
+    `暂存 ID：${row.id || '--'}`,
+    `相对路径：${row.relativePath || '--'}`,
+    `状态：${stagingStatusLabel(row.stagingStatus)}`,
+    `大小：${formatFileSize(row.size)}`,
+    `上传人：${row.uploadedBy || '--'}`,
+    `上传时间：${formatDateTime(row.uploadedAt || row.createdAt)}`,
+    row.duplicateOf ? `重复对象：${row.duplicateOf}` : '',
+    row.error ? `错误：${row.error}` : '',
+    `原始文件：${row.rawUri || row.rawPath || row.rawObjectKey || '--'}`,
+  ].filter(Boolean).join('\n');
+  ElMessageBox.alert(content, '上传待入库文件详情', {
+    confirmButtonText: '知道了',
+    customClass: 'knowledge-document-info-dialog',
+  });
+}
+
+async function ingestStagingItem(row = {}) {
+  if (!row?.id || stagingActionId.value) return;
+  try {
+    await ElMessageBox.confirm(
+      `确定将“${row.originalName || row.fileName || row.id}”正式入库吗？系统会开始解析、转 Markdown、生成 Passage / Relation，并启动 GraphRAG / Neo4j 建图；建图完成前 AI 仍不会把它作为正式知识库来源。`,
+      '确认正式入库',
+      {
+        type: 'warning',
+        confirmButtonText: '开始入库',
+        cancelButtonText: '取消',
+      }
+    );
+  } catch {
+    return;
+  }
+
+  stagingActionId.value = row.id;
+  try {
+    pendingStagingItems.value = pendingStagingItems.value.map((item) => (
+      item.id === row.id ? { ...item, stagingStatus: 'importing' } : item
+    ));
+    syncPendingIngestPolling();
+    const response = await ingestKnowledgeStagingItems({
+      stagingIds: [row.id],
+      trigger: 'manual',
+    });
+    const importedFiles = response?.summary?.importedFiles ?? response?.items?.length ?? 0;
+    if (importedFiles > 0) {
+      ElMessage.success('已启动入库和建图任务；完成 GraphRAG / Neo4j 后才会进入正式索引');
+      await loadPendingStagingItems();
+    } else {
+      ElMessage.warning(response?.warnings?.[0] || '入库任务未启动，请查看详情');
+      await loadPendingStagingItems();
+    }
+  } catch (error) {
+    ElMessage.error(error?.message || '入库任务启动失败');
+    await loadPendingStagingItems();
+  } finally {
+    stagingActionId.value = '';
+  }
+}
+
+async function ingestAllPendingStagingItems() {
+  if (stagingActionId.value) return;
+  const eligibleItems = pendingStagingItems.value.filter((item) => item.stagingStatus === 'uploaded_pending');
+  if (!eligibleItems.length) {
+    ElMessage.warning('当前没有可入库的待上传文件');
+    return;
+  }
+  try {
+    await ElMessageBox.confirm(
+      `确定一键入库 ${eligibleItems.length} 个待入库文件吗？系统会逐个解析并启动 GraphRAG / Neo4j 建图；建图完成前这些文件不会出现在正式索引，也不会作为 AI 默认知识库来源。`,
+      '确认一键入库',
+      {
+        type: 'warning',
+        confirmButtonText: '开始入库',
+        cancelButtonText: '取消',
+      }
+    );
+  } catch {
+    return;
+  }
+
+  stagingActionId.value = 'ingest-all';
+  try {
+    const eligibleIds = new Set(eligibleItems.map((item) => item.id));
+    pendingStagingItems.value = pendingStagingItems.value.map((item) => (
+      eligibleIds.has(item.id) ? { ...item, stagingStatus: 'importing' } : item
+    ));
+    syncPendingIngestPolling();
+    const response = await ingestKnowledgeStagingItems({
+      stagingIds: [...eligibleIds],
+      trigger: 'manual_batch',
+    });
+    const importedFiles = response?.summary?.importedFiles ?? response?.items?.length ?? 0;
+    if (importedFiles > 0) {
+      ElMessage.success(`已启动 ${importedFiles} 个文件的入库和建图任务；完成 GraphRAG / Neo4j 后才会进入正式索引`);
+    } else {
+      ElMessage.warning(response?.warnings?.[0] || '没有文件进入入库链路');
+    }
+    await loadPendingStagingItems();
+  } catch (error) {
+    ElMessage.error(error?.message || '一键入库任务启动失败');
+    await loadPendingStagingItems();
+  } finally {
+    stagingActionId.value = '';
+  }
+}
+
+async function stageChatTemporaryDocument(row = {}) {
+  if (!row?.id || chatTemporaryActionId.value) return;
+  try {
+    await ElMessageBox.confirm(
+      `确定将聊天临时文件“${row.title || row.originalName || row.fileName || row.id}”上传到待入库吗？这一步只会进入“上传待入库”，不会直接解析成正式知识库。`,
+      '上传到待入库',
+      {
+        type: 'warning',
+        confirmButtonText: '上传到待入库',
+        cancelButtonText: '取消',
+      }
+    );
+  } catch {
+    return;
+  }
+
+  chatTemporaryActionId.value = `stage:${row.id}`;
+  try {
+    const response = await stageKnowledgeDocumentsFromSource({
+      sourceIds: [row.id],
+      source: 'chat_upload',
+      reviewer: getCurrentReviewer(),
+    });
+    const stagedCount = response?.summary?.uploadedFiles ?? response?.items?.length ?? 0;
+    if (stagedCount > 0) {
+      ElMessage.success('已上传到待入库；尚未解析，尚未成为 AI 可用的正式知识库');
+      knowledgeTab.value = 'pending';
+      await loadPendingStagingItems();
+    } else {
+      ElMessage.warning(response?.warnings?.[0] || '未能上传到待入库');
+    }
+    await loadChatTemporaryDocuments();
+  } catch (error) {
+    ElMessage.error(error?.message || '上传到待入库失败');
+  } finally {
+    chatTemporaryActionId.value = '';
+  }
+}
+
+async function stageAllChatTemporaryDocuments() {
+  if (!chatTemporaryDocuments.value.length || chatTemporaryActionId.value) return;
+  try {
+    await ElMessageBox.confirm(
+      `确定将 ${chatTemporaryDocuments.value.length} 个聊天临时文件上传到待入库吗？这一步不会正式入库，也不会让 AI 默认使用这些文件。`,
+      '一键上传到待入库',
+      {
+        type: 'warning',
+        confirmButtonText: '上传到待入库',
+        cancelButtonText: '取消',
+      }
+    );
+  } catch {
+    return;
+  }
+
+  chatTemporaryActionId.value = 'stage-all';
+  try {
+    const response = await stageKnowledgeDocumentsFromSource({
+      sourceIds: chatTemporaryDocuments.value.map((item) => item.id).filter(Boolean),
+      source: 'chat_upload',
+      reviewer: getCurrentReviewer(),
+    });
+    const stagedCount = response?.summary?.uploadedFiles ?? response?.items?.filter((item) => item.stagingStatus === 'uploaded_pending').length ?? 0;
+    const duplicateCount = response?.summary?.duplicateFiles ?? response?.items?.filter((item) => item.stagingStatus === 'duplicate').length ?? 0;
+    if (stagedCount > 0 || duplicateCount > 0) {
+      ElMessage.success(`已处理 ${stagedCount + duplicateCount} 个聊天临时文件，其中 ${stagedCount} 个已上传到待入库；尚未正式入库`);
+      knowledgeTab.value = 'pending';
+      await loadPendingStagingItems();
+    } else {
+      ElMessage.warning(response?.warnings?.[0] || '没有可上传到待入库的聊天临时文件');
+    }
+    await loadChatTemporaryDocuments();
+  } catch (error) {
+    ElMessage.error(error?.message || '一键上传失败');
+  } finally {
+    chatTemporaryActionId.value = '';
+  }
+}
+
+async function removeChatTemporaryFile(row = {}) {
+  if (!row?.id || chatTemporaryActionId.value) return;
+  try {
+    await ElMessageBox.confirm(
+      `确定移除聊天临时文件“${row.title || row.originalName || row.fileName || row.id}”吗？这只会移除聊天临时文件，不会删除正式索引文件。`,
+      '移除聊天临时文件',
+      {
+        type: 'warning',
+        confirmButtonText: '移除',
+        cancelButtonText: '取消',
+      }
+    );
+  } catch {
+    return;
+  }
+
+  chatTemporaryActionId.value = `remove:${row.id}`;
+  try {
+    await removeChatTemporaryDocument(row.id);
+    ElMessage.success('聊天临时文件已移除');
+    await loadChatTemporaryDocuments();
+  } catch (error) {
+    ElMessage.error(error?.message || '聊天临时文件移除失败');
+  } finally {
+    chatTemporaryActionId.value = '';
+  }
+}
+
+async function confirmDeleteKnowledgeDocument(row = {}) {
+  if (!row?.id || deletingDocumentId.value) return;
+  try {
+    await ElMessageBox.confirm(
+      `确定删除正式索引文件“${row.title || row.originalName || row.fileName || row.id}”吗？删除后 AI 将不再把它作为正式知识库来源，并会触发 GraphRAG / Neo4j 重建。`,
+      '删除知识库文件',
+      {
+        type: 'warning',
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+      }
+    );
+  } catch {
+    return;
+  }
+
+  deletingDocumentId.value = row.id;
+  try {
+    const response = await deleteKnowledgeDocument(row.id);
+    ElMessage.success(response?.indexJob?.id ? '已删除文件，并加入图谱索引重建队列' : '已从上传文件列表删除');
+    await loadKnowledgeDocuments();
+  } catch (error) {
+    ElMessage.error(error?.message || '文件删除失败');
+  } finally {
+    deletingDocumentId.value = '';
+  }
+}
+
+async function createManualGraphIndexJob() {
+  if (indexJobCreating.value) return;
+  try {
+    await ElMessageBox.confirm(
+      '确定手动触发正式索引全量重建吗？重建过程中正式知识库仍可查看，但图谱状态和检索结果可能需要等待任务完成后更新。',
+      '手动触发全量重建',
+      {
+        type: 'warning',
+        confirmButtonText: '触发重建',
+        cancelButtonText: '取消',
+      }
+    );
+  } catch {
+    return;
+  }
+
+  indexJobCreating.value = true;
+  try {
+    const response = await createGraphRagIndexJob({
+      trigger: 'manual',
+      scope: 'full_rebuild',
+      documentIds: [],
+      reason: 'Manual rebuild from UI',
+      executionMode: 'immediate',
+    });
+    const job = response?.item || response?.job;
+    ElMessage.success('已加入图谱索引队列');
+    await loadKnowledgeDocuments();
+  } catch (error) {
+    ElMessage.error(error?.message || '图谱索引任务创建失败');
+  } finally {
+    indexJobCreating.value = false;
+  }
+}
+
+async function loadReviewPolicies() {
+  reviewLoading.value = true;
+  try {
+    const response = await getReviewPolicies({
+      status: reviewStatusFilter.value,
+    });
+    reviewPolicies.value = Array.isArray(response?.items) ? response.items : [];
+  } catch (error) {
+    reviewPolicies.value = [];
+    ElMessage.error(error?.message || '审核列表加载失败');
+  } finally {
+    reviewLoading.value = false;
+  }
+}
+
+async function openKnowledgeReview(row) {
+  selectedReviewPolicy.value = row;
+  knowledgeReviewNote.value = row.reviewNote || '';
+  knowledgeReviewMode.value = 'view';
+  knowledgeReviewDialogVisible.value = true;
+  await loadReviewPolicyContent(row);
+}
+
+function openKnowledgeReject(row) {
+  selectedReviewPolicy.value = row;
+  knowledgeReviewNote.value = '';
+  knowledgeReviewMode.value = 'reject';
+  knowledgeReviewDialogVisible.value = true;
+  loadReviewPolicyContent(row);
+  nextTick(() => {
+    knowledgeReviewNoteRef.value?.focus?.();
+  });
+}
+
+async function loadReviewPolicyContent(row) {
+  if (!row?.id) {
+    selectedReviewPolicyContent.value = '';
+    return;
+  }
+
+  selectedReviewPolicyContentLoading.value = true;
+  try {
+    const response = await getReviewPolicyContent(row.id);
+    selectedReviewPolicy.value = response?.item || row;
+    selectedReviewPolicyContent.value = response?.content || '';
+  } catch (error) {
+    selectedReviewPolicyContent.value = '';
+    ElMessage.warning(error?.message || '资料正文加载失败');
+  } finally {
+    selectedReviewPolicyContentLoading.value = false;
+  }
+}
+
+async function submitKnowledgeReview(row, action) {
+  if (!row?.id) return;
+  if (action === 'reject' && !knowledgeReviewNote.value.trim()) {
+    selectedReviewPolicy.value = row;
+    knowledgeReviewDialogVisible.value = true;
+    ElMessage.warning('审核不通过请填写原因');
+    return;
+  }
+  if (action === 'approve') {
+    try {
+      await ElMessageBox.confirm(
+        `确定审核通过“${row.title || row.id}”吗？审核通过只代表资料可信，后续会进入“上传待入库”，不会直接进入正式索引。`,
+        '网络资料审核通过',
+        {
+          type: 'warning',
+          confirmButtonText: '审核通过',
+          cancelButtonText: '取消',
+        }
+      );
+    } catch {
+      return;
+    }
+  }
+
+  reviewActionId.value = row.id;
+  try {
+    const payload = {
+      reviewNote: knowledgeReviewNote.value,
+      reviewer: getCurrentReviewer(),
+    };
+    if (action === 'approve') {
+      const response = await approveReviewPolicy(row.id, payload);
+      const stagedCount = response?.staging?.summary?.uploadedFiles ?? 0;
+      const duplicateCount = response?.staging?.summary?.duplicateFiles ?? 0;
+      if (stagedCount > 0) {
+        ElMessage.success('审核通过，已进入上传待入库；尚未正式入库');
+        knowledgeTab.value = 'pending';
+        await loadPendingStagingItems();
+      } else if (duplicateCount > 0) {
+        ElMessage.warning('审核通过，但资料与已有文件重复，已在上传待入库中标记为重复');
+        knowledgeTab.value = 'pending';
+        await loadPendingStagingItems();
+      } else {
+        ElMessage.warning(response?.staging?.warnings?.[0] || '审核通过，但未生成待入库文件，请检查资料正文');
+      }
+    } else {
+      await rejectReviewPolicy(row.id, payload);
+      ElMessage.success('已审核不通过');
+    }
+    knowledgeReviewDialogVisible.value = false;
+    selectedReviewPolicy.value = null;
+    knowledgeReviewNote.value = '';
+    knowledgeReviewMode.value = 'view';
+    await loadReviewPolicies();
+  } catch (error) {
+    ElMessage.error(error?.message || '审核操作失败');
+  } finally {
+    reviewActionId.value = '';
+  }
+}
+
+function getCurrentReviewer() {
+  const name = localStorage.getItem('userName') || '当前账号';
+  return {
+    id: name,
+    name,
+    type: 'user',
+  };
+}
+
+function reviewStatusLabel(status) {
+  const labels = {
+    pending_review: '未审核',
+    approved: '已通过',
+    rejected: '未通过',
+    duplicate: '重复',
+  };
+  return labels[status] || status || '未知';
+}
+
+function reviewStatusType(status) {
+  if (status === 'approved') return 'success';
+  if (status === 'pending_review') return 'warning';
+  if (status === 'rejected') return 'danger';
+  if (status === 'duplicate') return 'info';
+  return 'info';
+}
+
+function sourceTrustLabel(value) {
+  if (value === 'government_official') return '政府官方';
+  if (value === 'non_official') return '非官方';
+  return '未知来源';
+}
+
+function sourceTrustType(value) {
+  if (value === 'government_official') return 'success';
+  if (value === 'non_official') return 'warning';
+  return 'info';
+}
+
+function getLastReviewLog(row = {}) {
+  const history = Array.isArray(row.reviewHistory) ? row.reviewHistory : [];
+  return history.length ? history[history.length - 1] : null;
+}
+
+function getLastReviewer(row = {}) {
+  return getLastReviewLog(row)?.reviewer || null;
+}
+
+function reviewActionLabel(action) {
+  if (action === 'approved_to_rejected') return '改为不通过';
+  const labels = {
+    created: '创建待审核',
+    auto_approved: 'AI自动通过',
+    approved: '审核通过',
+    rejected: '审核不通过',
+    duplicate: '标记重复',
+  };
+  return labels[action] || action || '审核记录';
 }
 
 function closeInspectionPanel(options = {}) {
@@ -1364,12 +3042,27 @@ watch(
   }
 );
 
+watch(
+  () => knowledgeReviewDialogVisible.value,
+  (value) => {
+    if (!value) {
+      selectedReviewPolicy.value = null;
+      selectedReviewPolicyContent.value = '';
+      selectedReviewPolicyContentLoading.value = false;
+      knowledgeReviewNote.value = '';
+      knowledgeReviewMode.value = 'view';
+    }
+  }
+);
+
 onMounted(async () => {
   await ensureBaseData();
 });
 
 onBeforeUnmount(() => {
   stopPlaybackTimer();
+  stopKnowledgeImportPolling();
+  stopPendingIngestPolling();
 });
 </script>
 
@@ -1466,6 +3159,18 @@ onBeforeUnmount(() => {
   justify-content: center;
 }
 
+.knowledge-layout {
+  position: fixed;
+  top: calc(var(--map-topbar-height, 50px) + var(--map-module-toolbar-height, 60px));
+  right: 0;
+  bottom: 0;
+  left: 0;
+  width: 100vw;
+  z-index: 20;
+  display: flex;
+  justify-content: center;
+}
+
 .inspection-panel {
   width: 80vw;
   height: 100%;
@@ -1478,6 +3183,262 @@ onBeforeUnmount(() => {
     0 24px 60px rgba(15, 23, 42, 0.18),
     0 8px 20px rgba(30, 64, 175, 0.08);
   overflow: hidden;
+}
+
+.knowledge-panel {
+  width: 100%;
+  height: 100%;
+  max-height: 100%;
+  border-radius: 0;
+  border: 0;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(247, 250, 255, 0.95));
+  box-shadow: none;
+  overflow: hidden;
+}
+
+.knowledge-tabs {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+:deep(.knowledge-tabs .el-tabs__header) {
+  flex: 0 0 auto;
+  order: 0;
+  margin: 0 0 12px;
+}
+
+:deep(.knowledge-panel > .el-card__header) {
+  padding: 14px 22px;
+  border-bottom: 1px solid #e5edf7;
+  background: linear-gradient(180deg, #f8fbff, #ffffff);
+}
+
+:deep(.knowledge-panel > .el-card__body) {
+  height: calc(100% - 78px);
+  min-height: 0;
+  padding: 14px 18px 18px;
+  box-sizing: border-box;
+}
+
+:deep(.knowledge-tabs .el-tabs__content) {
+  flex: 1;
+  min-height: 0;
+  order: 1;
+  overflow: hidden;
+}
+
+:deep(.knowledge-tabs .el-tab-pane) {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.knowledge-import-input {
+  display: none;
+}
+
+.knowledge-import-summary {
+  flex: 0 0 auto;
+  margin-bottom: 12px;
+}
+
+.knowledge-ingest-progress {
+  flex: 0 0 auto;
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.knowledge-ingest-progress__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  color: #334155;
+  font-size: 13px;
+}
+
+.knowledge-import-preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  color: #475569;
+  font-size: 13px;
+}
+
+.knowledge-import-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.knowledge-import-progress__message {
+  min-height: 22px;
+  color: #334155;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.knowledge-import-duplicates {
+  max-height: 120px;
+  overflow: auto;
+  padding: 10px 12px;
+  border: 1px solid #fde68a;
+  border-radius: 8px;
+  background: #fffbeb;
+}
+
+.knowledge-document-preview {
+  min-height: 420px;
+}
+
+.knowledge-document-preview__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin-bottom: 12px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.knowledge-document-preview__content {
+  height: 62vh;
+  max-height: 680px;
+  min-height: 360px;
+  margin: 0;
+  padding: 14px;
+  overflow: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #1e293b;
+  font-family: Consolas, "Microsoft YaHei", monospace;
+  font-size: 13px;
+  line-height: 1.75;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.knowledge-index-toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.knowledge-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.knowledge-browse-grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(420px, 0.95fr) minmax(0, 1.35fr);
+  gap: 14px;
+  height: auto;
+  min-height: 0;
+}
+
+.knowledge-dataset-list,
+.knowledge-document-table {
+  min-height: 0;
+  padding: 14px;
+  border: 1px solid #e3ebf5;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.knowledge-document-table {
+  display: flex;
+  flex-direction: column;
+}
+
+.knowledge-document-table--fill {
+  flex: 1;
+  min-height: 0;
+}
+
+.knowledge-document-table :deep(.el-table) {
+  flex: 1;
+  min-height: 0;
+}
+
+.knowledge-dataset-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow: auto;
+}
+
+.knowledge-browse-grid--files-only {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.knowledge-section-title {
+  margin-bottom: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.knowledge-review-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.knowledge-review-count {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.knowledge-review-log-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.knowledge-review-content {
+  min-height: 160px;
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 12px;
+}
+
+.knowledge-review-content pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.7;
+  color: #334155;
+}
+
+.knowledge-review-required-tip {
+  margin: -10px 0 0 90px;
+  color: #dc2626;
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .panel-header {
@@ -1504,6 +3465,8 @@ onBeforeUnmount(() => {
 .panel-header__actions {
   display: flex;
   gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .filter-form {

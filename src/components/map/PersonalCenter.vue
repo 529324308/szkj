@@ -117,7 +117,7 @@
 									<template #header>
 										<div class="content-card__header">
 											<span>项目状态分布</span>
-											<el-tag size="small" effect="plain">{{ scopedProjects.length }} 个项目</el-tag>
+											<el-tag size="small" effect="plain">{{ overviewProjectTotal }} 个项目</el-tag>
 										</div>
 									</template>
 									<div class="status-distribution">
@@ -167,15 +167,15 @@
 										<div class="report-rate-panel__stats">
 											<div class="report-rate-row">
 												<span>今日已提交</span>
-												<strong>{{ todaySubmittedReportsCount }} / {{ scopedEmployees.length }}</strong>
+												<strong>{{ overviewTodaySubmittedReportsCount }} / {{ overviewReportExpectedCount }}</strong>
 											</div>
 											<div class="report-rate-row">
 												<span>未提交</span>
-												<strong>{{ Math.max(scopedEmployees.length - todaySubmittedReportsCount, 0) }}</strong>
+												<strong>{{ overviewPendingReportsCount }}</strong>
 											</div>
 											<div class="report-rate-row">
 												<span>近周期日报</span>
-												<strong>{{ reportsInRange.length }} 条</strong>
+												<strong>{{ overviewRangeReportCount }} 条</strong>
 											</div>
 										</div>
 									</div>
@@ -373,738 +373,84 @@
 						</template>
 
 						<template v-else-if="activeSection === 'employees'">
-							<section class="employee-page">
-								<el-card shadow="never" class="content-card employee-filter-card">
-									<template #header>
-										<div class="content-card__header">
-											<span>员工筛选</span>
-											<div class="employee-filter-actions">
-												<el-button type="primary" @click="openCreateEmployeeDialog">新增员工</el-button>
-												<el-button v-if="currentRole === ROLE_ENUM.ADMIN" @click="openDepartmentDialog">新增部门</el-button>
-												<el-button @click="resetEmployeeFilters">重置筛选</el-button>
-											</div>
-										</div>
-									</template>
-									<div class="employee-filter-grid">
-										<el-input
-											v-model="employeeFilters.keyword"
-											clearable
-											placeholder="按姓名、电话、邮箱或职位搜索"
-										/>
-										<el-select
-											v-model="employeeFilters.department"
-											clearable
-											:disabled="currentRole === ROLE_ENUM.MANAGER"
-											placeholder="筛选部门"
-										>
-											<el-option
-												v-for="department in employeeDepartmentOptions"
-												:key="department"
-												:label="department"
-												:value="department"
-											/>
-										</el-select>
-										<el-select v-model="employeeFilters.status" clearable placeholder="筛选状态">
-											<el-option
-												v-for="status in employeeStatusOptions"
-												:key="status"
-												:label="status"
-												:value="status"
-											/>
-										</el-select>
-									</div>
-								</el-card>
-
-								<el-card shadow="never" class="content-card employee-table-card">
-									<template #header>
-										<div class="content-card__header">
-											<span>{{ currentRole === ROLE_ENUM.ADMIN ? '员工列表' : '部门员工列表' }}</span>
-											<el-tag type="primary" effect="plain">{{ filteredEmployees.length }} 人</el-tag>
-										</div>
-									</template>
-									<div class="employee-table-shell">
-										<el-table
-											v-if="filteredEmployees.length"
-											:data="paginatedEmployees"
-											border
-											stripe
-											height="100%"
-											class="employee-table"
-										>
-											<el-table-column label="头像" width="88" align="center">
-												<template #default="{ row }">
-													<div class="employee-avatar">{{ row.name.slice(0, 1) }}</div>
-												</template>
-											</el-table-column>
-											<el-table-column prop="name" label="姓名" min-width="110" />
-											<el-table-column prop="userName" label="账号" min-width="130" />
-											<el-table-column prop="department" label="所属部门" min-width="120" />
-											<el-table-column prop="position" label="职位" min-width="140" show-overflow-tooltip />
-											<el-table-column prop="phone" label="联系电话" min-width="130" />
-											<el-table-column prop="email" label="邮箱" min-width="190" show-overflow-tooltip />
-											<el-table-column label="状态" width="100" align="center">
-												<template #default="{ row }">
-													<el-tag size="small" :type="employeeStatusTagTypeMap[row.status] || 'info'">{{ row.status }}</el-tag>
-												</template>
-											</el-table-column>
-											<el-table-column prop="createdAt" label="创建时间" min-width="170" />
-											<el-table-column label="操作" width="180" fixed="right" align="center">
-												<template #default="{ row }">
-													<div class="employee-row-actions">
-														<el-button link type="primary" @click="openEditEmployeeDialog(row)">编辑</el-button>
-														<el-popconfirm
-															title="确认删除该员工吗？"
-															confirm-button-text="删除"
-															cancel-button-text="取消"
-															:disabled="isProtectedEmployee(row)"
-															@confirm="removeEmployee(row)"
-														>
-															<template #reference>
-																<el-button
-																	link
-																	type="danger"
-																	:disabled="isProtectedEmployee(row)"
-																>
-																	删除
-																</el-button>
-															</template>
-														</el-popconfirm>
-													</div>
-												</template>
-											</el-table-column>
-										</el-table>
-										<div v-else class="module-empty-state">
-											<el-empty :image-size="88" description="当前筛选条件下暂无员工数据" />
-											<div class="module-empty-state__actions">
-												<el-button @click="resetEmployeeFilters">重置筛选</el-button>
-												<el-button type="primary" @click="openCreateEmployeeDialog">新增员工</el-button>
-											</div>
-										</div>
-									</div>
-									<div class="employee-pagination">
-										<div class="employee-pagination__total">共 {{ filteredEmployees.length }} 人</div>
-										<el-pagination
-											v-model:current-page="employeeTablePage"
-											v-model:page-size="employeeTablePageSize"
-											background
-											layout="prev, pager, next, sizes"
-											:page-sizes="[10, 20, 50]"
-											:total="filteredEmployees.length"
-										/>
-									</div>
-								</el-card>
-							</section>
-
-							<el-dialog
-								v-model="employeeDialogVisible"
-								:title="employeeDialogTitle"
-								width="640px"
-								append-to-body
-							>
-								<el-form
-									ref="employeeFormRef"
-									:model="employeeForm"
-									:rules="employeeRules"
-									label-width="88px"
-									@submit.prevent
-								>
-									<div class="employee-form-grid">
-										<el-form-item label="姓名" prop="name">
-											<el-input v-model="employeeForm.name" maxlength="20" placeholder="请输入员工姓名" />
-										</el-form-item>
-										<el-form-item label="电话" prop="phone">
-											<el-input v-model="employeeForm.phone" maxlength="11" placeholder="请输入手机号" />
-										</el-form-item>
-										<el-form-item label="邮箱" prop="email">
-											<el-input v-model="employeeForm.email" placeholder="请输入邮箱" />
-										</el-form-item>
-										<el-form-item label="部门" prop="department">
-											<div class="employee-department-field">
-												<el-select
-													v-model="employeeForm.department"
-													placeholder="请选择所属部门"
-													:disabled="currentRole === ROLE_ENUM.MANAGER"
-												>
-													<el-option
-														v-for="department in employeeDepartmentOptions"
-														:key="department"
-														:label="department"
-														:value="department"
-													/>
-												</el-select>
-												<el-button
-													v-if="currentRole === ROLE_ENUM.ADMIN"
-													type="primary"
-													plain
-													@click="openDepartmentDialog"
-												>
-													新增部门
-												</el-button>
-											</div>
-										</el-form-item>
-										<el-form-item label="职位" prop="position">
-											<el-input v-model="employeeForm.position" maxlength="30" placeholder="请输入职位" />
-										</el-form-item>
-										<el-form-item v-if="currentRole === ROLE_ENUM.ADMIN" label="角色" prop="role">
-											<el-select v-model="employeeForm.role" placeholder="请选择角色" @change="handleRoleChange">
-												<el-option
-													v-for="item in employeeRoleOptions"
-													:key="item.value"
-													:label="item.label"
-													:value="item.value"
-												/>
-											</el-select>
-										</el-form-item>
-										<el-form-item label="状态" prop="status">
-											<el-select v-model="employeeForm.status" placeholder="请选择状态">
-												<el-option
-													v-for="status in employeeStatusOptions"
-													:key="status"
-													:label="status"
-													:value="status"
-												/>
-											</el-select>
-										</el-form-item>
-										<el-form-item class="employee-form-grid__full" label="平台账号" prop="userName">
-											<el-input
-												v-model="employeeForm.userName"
-												placeholder="姓名填写后将自动生成默认平台账号，可手动调整"
-												@input="handleEmployeeUserNameInput"
-											/>
-										</el-form-item>
-										<el-form-item class="employee-form-grid__full" label="平台密码" prop="password">
-											<el-input
-												v-model="employeeForm.password"
-												type="text"
-												placeholder="默认密码已生成，可按需调整"
-											/>
-										</el-form-item>
-									</div>
-								</el-form>
-								<template #footer>
-									<div class="dialog-footer">
-										<el-button @click="employeeDialogVisible = false">取消</el-button>
-										<el-button type="primary" @click="submitEmployeeForm">保存</el-button>
-									</div>
-								</template>
-							</el-dialog>
-
-							<el-dialog
-								v-model="departmentDialogVisible"
-								title="新增部门"
-								width="420px"
-								append-to-body
-							>
-								<el-form ref="departmentFormRef" :model="departmentForm" :rules="departmentRules" label-width="88px" @submit.prevent>
-									<el-form-item label="部门名称" prop="name">
-										<el-input v-model="departmentForm.name" maxlength="20" placeholder="请输入新部门名称" />
-									</el-form-item>
-								</el-form>
-								<template #footer>
-									<div class="dialog-footer">
-										<el-button @click="departmentDialogVisible = false">取消</el-button>
-										<el-button type="primary" @click="submitDepartmentForm">保存</el-button>
-									</div>
-								</template>
-							</el-dialog>
+							<EmployeeManagement
+								:current-role="currentRole"
+								:current-user="currentUser"
+								:api-data="apiData"
+								:scoped-employees="scopedEmployees"
+								@update:api-data="handleApiDataUpdate"
+							/>
 						</template>
 
 						<template v-else-if="activeSection === 'projects'">
-							<section class="project-page">
-								<section class="metrics-grid">
-									<el-card
-										v-for="card in projectSummaryCards"
-										:key="card.key"
-										shadow="hover"
-										class="metric-card"
-									>
-										<div class="metric-card__label">{{ card.label }}</div>
-										<div class="metric-card__value">{{ card.value }}</div>
-										<div class="metric-card__hint">{{ card.hint }}</div>
-									</el-card>
-								</section>
-
-								<el-card shadow="never" class="content-card project-filter-card">
-									<template #header>
-										<div class="content-card__header">
-											<span>项目筛选</span>
-											<div class="project-filter-actions">
-												<el-button v-if="currentRole !== ROLE_ENUM.EMPLOYEE" type="primary" @click="openCreateProjectDialog">
-													{{ currentRole === ROLE_ENUM.ADMIN ? '下发项目' : '下发本部门项目' }}
-												</el-button>
-												<el-button @click="resetProjectFilters">重置筛选</el-button>
-											</div>
-										</div>
-									</template>
-									<div class="project-filter-grid">
-										<el-input
-											v-model="projectFilters.keyword"
-											clearable
-											placeholder="按项目名、客户名或执行人搜索"
-										/>
-										<el-select v-model="projectFilters.status" clearable placeholder="筛选状态">
-											<el-option
-												v-for="status in projectStatusOptions"
-												:key="status"
-												:label="status"
-												:value="status"
-											/>
-										</el-select>
-										<el-select v-model="projectFilters.priority" clearable placeholder="筛选优先级">
-											<el-option
-												v-for="priority in projectPriorityOptions"
-												:key="priority"
-												:label="priority"
-												:value="priority"
-											/>
-										</el-select>
-										<el-select v-model="projectFilters.progress" clearable placeholder="筛选项目进度">
-											<el-option
-												v-for="option in projectProgressFilterOptions"
-												:key="option.value"
-												:label="option.label"
-												:value="option.value"
-											/>
-										</el-select>
-										<el-select
-											v-if="currentRole !== ROLE_ENUM.EMPLOYEE"
-											v-model="projectFilters.department"
-											clearable
-											:disabled="currentRole === ROLE_ENUM.MANAGER"
-											placeholder="筛选部门"
-										>
-											<el-option
-												v-for="department in projectDepartmentOptions"
-												:key="department"
-												:label="department"
-												:value="department"
-											/>
-										</el-select>
-									</div>
-								</el-card>
-
-								<el-card shadow="never" class="content-card project-table-card">
-									<template #header>
-										<div class="content-card__header">
-											<span>{{ projectTableTitle }}</span>
-											<el-tag type="primary" effect="plain">{{ filteredProjects.length }} 个</el-tag>
-										</div>
-									</template>
-									<div class="project-table-shell">
-										<el-table
-											v-if="filteredProjects.length"
-											:data="paginatedProjects"
-											border
-											stripe
-											height="100%"
-											class="project-table"
-										>
-											<el-table-column prop="projectName" label="项目名称" min-width="200" show-overflow-tooltip />
-											<el-table-column prop="customerName" label="客户名称" min-width="160" show-overflow-tooltip />
-											<el-table-column
-												v-if="currentRole !== ROLE_ENUM.EMPLOYEE"
-												prop="department"
-												label="所属部门"
-												min-width="130"
-											/>
-											<el-table-column prop="leader" label="负责人" min-width="110" />
-											<el-table-column prop="executor" label="执行人" min-width="110" />
-											<el-table-column label="进度" min-width="180">
-												<template #default="{ row }">
-													<el-progress
-														:percentage="row.progress"
-														:stroke-width="12"
-														:status="row.status === '已完成' ? 'success' : undefined"
-													/>
-												</template>
-											</el-table-column>
-											<el-table-column label="状态" width="100" align="center">
-												<template #default="{ row }">
-													<el-tag size="small" :type="statusTagTypeMap[row.status] || 'info'">{{ row.status }}</el-tag>
-												</template>
-											</el-table-column>
-											<el-table-column label="优先级" width="100" align="center">
-												<template #default="{ row }">
-													<el-tag size="small" effect="plain" :type="priorityTagTypeMap[row.priority] || 'info'">{{ row.priority }}</el-tag>
-												</template>
-											</el-table-column>
-											<el-table-column prop="deadline" label="截止日期" min-width="120" />
-											<el-table-column label="附件" width="86" align="center">
-												<template #default="{ row }">
-													{{ getProjectAttachmentCount(row) }}
-												</template>
-											</el-table-column>
-											<el-table-column label="操作" min-width="220" fixed="right" align="center">
-												<template #default="{ row }">
-													<div class="project-row-actions">
-														<el-button link type="primary" @click="openProjectDetail(row)">详情</el-button>
-														<el-button
-															v-if="canSubmitProjectProgress(row)"
-															link
-															type="success"
-															@click="openProjectProgressDialog(row)"
-														>
-															提交进度
-														</el-button>
-														<el-button
-															v-if="canAuditProject(row)"
-															link
-															type="success"
-															@click="approveProject(row)"
-														>
-															审核通过
-														</el-button>
-														<el-button
-															v-if="canAuditProject(row)"
-															link
-															type="danger"
-															@click="rejectProject(row)"
-														>
-															驳回
-														</el-button>
-													</div>
-												</template>
-											</el-table-column>
-										</el-table>
-										<div v-else class="module-empty-state">
-											<el-empty :image-size="88" description="当前筛选条件下暂无项目数据" />
-											<div class="module-empty-state__actions">
-												<el-button @click="resetProjectFilters">重置筛选</el-button>
-												<el-button v-if="currentRole !== ROLE_ENUM.EMPLOYEE" type="primary" @click="openCreateProjectDialog">
-													{{ currentRole === ROLE_ENUM.ADMIN ? '下发项目' : '下发本部门项目' }}
-												</el-button>
-											</div>
-										</div>
-									</div>
-									<div class="employee-pagination">
-										<div class="employee-pagination__total">共 {{ filteredProjects.length }} 个</div>
-										<el-pagination
-											v-model:current-page="projectTablePage"
-											v-model:page-size="projectTablePageSize"
-											background
-											layout="prev, pager, next, sizes"
-											:page-sizes="[10, 20, 50]"
-											:total="filteredProjects.length"
-										/>
-									</div>
-								</el-card>
-							</section>
-
-							<el-dialog
-								v-model="projectDetailVisible"
-								title="项目详情"
-								width="920px"
-								append-to-body
-							>
-								<div v-if="currentProjectDetail" class="project-detail-grid">
-									<div class="project-detail-panel">
-										<div class="project-detail-panel__header">
-											<div>
-												<div class="project-detail-panel__title">{{ currentProjectDetail.projectName }}</div>
-												<div class="project-detail-panel__meta">
-													{{ currentProjectDetail.department }} / {{ currentProjectDetail.customerName }} / 截止 {{ currentProjectDetail.deadline }}
-												</div>
-											</div>
-											<el-tag :type="statusTagTypeMap[currentProjectDetail.status] || 'info'">
-												{{ currentProjectDetail.status }}
-											</el-tag>
-										</div>
-										<el-descriptions :column="2" border size="small" class="project-descriptions">
-											<el-descriptions-item label="客户联系方式">{{ currentProjectDetail.customerContact }}</el-descriptions-item>
-											<el-descriptions-item label="项目负责人">{{ currentProjectDetail.leader }}</el-descriptions-item>
-											<el-descriptions-item label="执行人">{{ currentProjectDetail.executor }}</el-descriptions-item>
-											<el-descriptions-item label="当前进度">{{ currentProjectDetail.progress }}%</el-descriptions-item>
-											<el-descriptions-item label="当前节点">{{ getProjectStageLabel(getProjectCurrentStageKey(currentProjectDetail)) || '任务下发' }}</el-descriptions-item>
-											<el-descriptions-item label="优先级">{{ currentProjectDetail.priority }}</el-descriptions-item>
-											<el-descriptions-item label="创建日期">{{ currentProjectDetail.createdAt }}</el-descriptions-item>
-											<el-descriptions-item label="项目描述" :span="2">
-												{{ getProjectDescription(currentProjectDetail) }}
-											</el-descriptions-item>
-										</el-descriptions>
-									</div>
-
-									<div class="project-detail-section">
-										<div class="project-detail-section__title">进度与审核记录</div>
-										<el-scrollbar v-if="projectTimelineEntries.length" class="project-timeline-scroll">
-											<el-timeline class="project-timeline">
-												<el-timeline-item
-													v-for="entry in projectTimelineEntries"
-													:key="entry.key"
-													:timestamp="entry.date"
-													placement="top"
-													:color="entry.color"
-												>
-													<el-card shadow="never" class="project-timeline-card">
-														<div class="project-timeline__head">
-															<strong>{{ entry.title }}</strong>
-															<el-tag size="small" effect="plain" :style="{ color: entry.color, borderColor: entry.color }">
-																{{ entry.typeLabel }}
-															</el-tag>
-														</div>
-														<div class="project-timeline__desc">{{ entry.content }}</div>
-														<div v-if="entry.attachments?.length" class="project-timeline__attachments">
-															<div class="project-timeline__attachments-title">附件</div>
-															<div class="project-timeline__attachment-list">
-																<button
-																	v-for="(attachment, attachmentIndex) in entry.attachments"
-																	:key="`${entry.key}-${attachmentIndex}`"
-																	type="button"
-																	class="project-timeline__attachment-item"
-																	@click="downloadProjectAttachment(currentProjectDetail, attachment, entry.title)"
-																>
-																	<el-icon><Download /></el-icon>
-																	{{ attachment }}
-																</button>
-															</div>
-														</div>
-													</el-card>
-												</el-timeline-item>
-											</el-timeline>
-										</el-scrollbar>
-										<el-empty v-else :image-size="72" description="暂无进度记录" />
-									</div>
-
-									<div class="project-detail-section">
-										<div class="project-detail-section__header">
-											<div class="project-detail-section__title">附件列表</div>
-											<el-button
-												v-if="currentProjectDetail && currentProjectAttachments.length"
-												size="small"
-												type="primary"
-												plain
-												@click="downloadAllProjectAttachments(currentProjectDetail)"
-											>
-												下载全部
-											</el-button>
-										</div>
-										<div v-if="currentProjectAttachments.length" class="project-attachment-list">
-											<button
-												v-for="(attachment, index) in currentProjectAttachments"
-												:key="`${currentProjectDetail.id}-${index}`"
-												type="button"
-												class="project-attachment-item"
-												@click="downloadProjectAttachment(currentProjectDetail, attachment, '项目详情附件')"
-											>
-												<el-icon><Download /></el-icon>
-												<span>{{ attachment }}</span>
-											</button>
-										</div>
-										<el-empty v-else :image-size="72" description="当前项目暂无附件" />
-									</div>
-								</div>
-								<template #footer>
-									<div class="dialog-footer">
-										<el-button @click="projectDetailVisible = false">关闭</el-button>
-										<el-button
-											v-if="currentProjectDetail && canSubmitProjectProgress(currentProjectDetail)"
-											type="primary"
-											@click="openProjectProgressDialog(currentProjectDetail)"
-										>
-											提交进度
-										</el-button>
-										<el-button
-											v-if="currentProjectDetail && canAuditProject(currentProjectDetail)"
-											type="danger"
-											plain
-											@click="rejectProject(currentProjectDetail)"
-										>
-											驳回
-										</el-button>
-										<el-button
-											v-if="currentProjectDetail && canAuditProject(currentProjectDetail)"
-											type="success"
-											@click="approveProject(currentProjectDetail)"
-										>
-											审核通过
-										</el-button>
-									</div>
-								</template>
-							</el-dialog>
-
-							<el-dialog
-								v-model="projectFormVisible"
-								:title="currentRole === ROLE_ENUM.ADMIN ? '下发项目' : '下发本部门项目'"
-								width="720px"
-								append-to-body
-							>
-								<el-form
-									ref="projectFormRef"
-									:model="projectForm"
-									:rules="projectRules"
-									label-width="92px"
-									@submit.prevent
-								>
-									<div class="project-form-grid">
-										<el-form-item label="所属部门" prop="department">
-											<el-select
-												v-model="projectForm.department"
-												:disabled="currentRole === ROLE_ENUM.MANAGER"
-												placeholder="请选择所属部门"
-												@change="handleProjectDepartmentChange"
-											>
-												<el-option
-													v-for="department in projectDepartmentOptions"
-													:key="department"
-													:label="department"
-													:value="department"
-												/>
-											</el-select>
-										</el-form-item>
-										<el-form-item label="执行人" prop="executor">
-											<el-select v-model="projectForm.executor" placeholder="请选择执行人">
-												<el-option
-													v-for="employee in availableProjectExecutors"
-													:key="employee.id"
-													:label="`${employee.name} / ${employee.position}`"
-													:value="employee.name"
-												/>
-											</el-select>
-										</el-form-item>
-										<el-form-item label="客户名称" prop="customerName">
-											<el-input v-model="projectForm.customerName" placeholder="请输入客户名称" />
-										</el-form-item>
-										<el-form-item label="联系方式" prop="customerContact">
-											<el-input v-model="projectForm.customerContact" placeholder="请输入客户联系方式" />
-										</el-form-item>
-										<el-form-item class="project-form-grid__full" label="项目名称" prop="projectName">
-											<el-input v-model="projectForm.projectName" placeholder="请输入项目名称" />
-										</el-form-item>
-										<el-form-item class="project-form-grid__full" label="项目描述" prop="projectDesc">
-											<el-input
-												v-model="projectForm.projectDesc"
-												type="textarea"
-												:rows="3"
-												placeholder="请输入项目描述"
-											/>
-										</el-form-item>
-										<el-form-item label="截止日期" prop="deadline">
-											<el-date-picker
-												v-model="projectForm.deadline"
-												type="date"
-												value-format="YYYY-MM-DD"
-												placeholder="请选择截止日期"
-											/>
-										</el-form-item>
-										<el-form-item label="优先级" prop="priority">
-											<el-select v-model="projectForm.priority" placeholder="请选择优先级">
-												<el-option
-													v-for="priority in projectPriorityOptions"
-													:key="priority"
-													:label="priority"
-													:value="priority"
-												/>
-											</el-select>
-										</el-form-item>
-										<el-form-item class="project-form-grid__full" label="附件清单">
-											<el-upload
-												v-model:file-list="projectForm.attachmentFiles"
-												class="project-upload"
-												drag
-												multiple
-												:auto-upload="false"
-											>
-												<el-icon class="el-icon--upload"><UploadFilled /></el-icon>
-												<div class="el-upload__text">
-													将文件拖到此处，或<em>点击上传</em>
-												</div>
-												<template #tip>
-													<div class="project-upload__tip">
-														仅做前端模拟展示，不上传到服务器；提交后会记录文件名到项目附件中。
-													</div>
-												</template>
-											</el-upload>
-										</el-form-item>
-									</div>
-								</el-form>
-								<template #footer>
-									<div class="dialog-footer">
-										<el-button @click="projectFormVisible = false">取消</el-button>
-										<el-button type="primary" @click="submitProjectForm">确认下发</el-button>
-									</div>
-								</template>
-							</el-dialog>
-
-							<el-dialog
-								v-model="projectProgressVisible"
-								title="提交项目进度"
-								width="640px"
-								append-to-body
-							>
-								<div v-if="progressTargetProject" class="project-progress-summary">
-									<div class="project-progress-summary__title">{{ progressTargetProject.projectName }}</div>
-									<div class="project-progress-summary__meta">
-										当前节点 {{ getProjectStageLabel(projectProgressCurrentStageKey) || '任务下发' }} / 当前进度 {{ progressTargetProject.progress }}%，截止 {{ progressTargetProject.deadline }}
-									</div>
-								</div>
-								<el-form
-									ref="projectProgressFormRef"
-									:model="projectProgressForm"
-									:rules="projectProgressRules"
-									label-width="92px"
-									@submit.prevent
-								>
-									<el-form-item label="进度节点" prop="stageKey">
-										<el-select v-model="projectProgressForm.stageKey" placeholder="请选择固定节点">
-											<el-option
-												v-for="stage in projectProgressStageOptions"
-												:key="stage.key"
-												:label="stage.label"
-												:value="stage.key"
-											/>
-										</el-select>
-									</el-form-item>
-									<el-form-item label="进度百分比" prop="progress">
-										<div class="project-progress-field">
-											<el-slider
-												v-model="projectProgressForm.progress"
-												:min="projectProgressRange.min"
-												:max="projectProgressRange.max"
-												:disabled="Boolean(selectedProjectProgressStage?.fixedProgress !== undefined)"
-												show-input
-											/>
-											<div class="project-progress-field__hint">{{ projectProgressStageHint }}</div>
-										</div>
-									</el-form-item>
-									<el-form-item label="进度说明" prop="content">
-										<el-input
-											v-model="projectProgressForm.content"
-											type="textarea"
-											:rows="4"
-											placeholder="请输入本次进度说明"
-										/>
-									</el-form-item>
-									<el-form-item label="补充附件">
-										<el-upload
-											v-model:file-list="projectProgressForm.attachmentFiles"
-											class="project-upload"
-											drag
-											multiple
-											:auto-upload="false"
-										>
-											<el-icon class="el-icon--upload"><UploadFilled /></el-icon>
-											<div class="el-upload__text">
-												将文件拖到此处，或<em>点击上传</em>
-											</div>
-											<template #tip>
-												<div class="project-upload__tip">
-													仅做前端模拟展示，不上传到服务器；提交后会追加到本次进度记录附件中。
-												</div>
-											</template>
-										</el-upload>
-									</el-form-item>
-								</el-form>
-								<template #footer>
-									<div class="dialog-footer">
-										<el-button @click="projectProgressVisible = false">取消</el-button>
-										<el-button type="primary" @click="submitProjectProgress">提交</el-button>
-									</div>
-								</template>
-							</el-dialog>
+							<ProjectManagement
+								ref="projectManagementRef"
+								:current-role="currentRole"
+								:role-enum="ROLE_ENUM"
+								:project-filters="projectFilters"
+								:project-form="projectForm"
+								:project-progress-form="projectProgressForm"
+								:project-rules="projectRules"
+								:project-progress-rules="projectProgressRules"
+								:project-department-options="projectDepartmentOptions"
+								:available-project-executors="availableProjectExecutors"
+								:filtered-projects="filteredProjects"
+								:project-table-page="projectTablePage"
+								:project-table-page-size="projectTablePageSize"
+								:project-total="projectTableTotal"
+								:project-detail-visible="projectDetailVisible"
+								:project-form-visible="projectFormVisible"
+								:project-progress-visible="projectProgressVisible"
+								:project-upload-progress-visible="projectUploadProgressVisible"
+								:project-upload-progress="projectUploadProgress"
+								:project-upload-progress-text="projectUploadProgressText"
+								:project-form-ref="projectFormRef"
+								:project-progress-form-ref="projectProgressFormRef"
+								:current-project-detail="currentProjectDetail"
+								:current-project-attachments="currentProjectAttachments"
+								:project-timeline-entries="projectTimelineEntries"
+								:progress-target-project="progressTargetProject"
+								:project-progress-baseline="projectProgressBaseline"
+								:project-progress-current-stage-key="projectProgressCurrentStageKey"
+								:project-progress-stage-options="projectProgressStageOptions"
+								:selected-project-progress-stage="selectedProjectProgressStage"
+								:project-progress-range="projectProgressRange"
+								:project-progress-stage-hint="projectProgressStageHint"
+								:project-table-title="projectTableTitle"
+								:project-summary-cards="projectSummaryCards"
+								:scoped-projects="scopedProjects"
+								:current-user="currentUser"
+								:get-project-attachment-count="getProjectAttachmentCount"
+								:get-project-current-stage-key="getProjectCurrentStageKey"
+								:get-project-stage-label="getProjectStageLabel"
+								:get-project-description="getProjectDescription"
+								:can-audit-project="canAuditProject"
+								:can-submit-project-progress="canSubmitProjectProgress"
+								@update-filter="handleProjectFilterUpdate"
+								@reset-filters="resetProjectFilters"
+								@open-detail="openProjectDetail"
+								@open-create-dialog="openCreateProjectDialog"
+								@open-progress="openProjectProgressDialog"
+								@approve="approveProject"
+								@reject="rejectProject"
+								@update-detail-visible="projectDetailVisible = $event"
+								@update-form-visible="projectFormVisible = $event"
+								@reset-form="resetProjectFormAndClose"
+								@update-progress-visible="projectProgressVisible = $event"
+								@department-change="handleProjectDepartmentChange"
+								@executor-change="handleProjectExecutorChange"
+								@submit-form="submitProjectForm"
+								@submit-progress="submitProjectProgress"
+								@download-attachment="downloadProjectAttachment"
+								@download-all-attachments="downloadAllProjectAttachments"
+								@update:project-table-page="projectTablePage = $event"
+								@update:project-table-page-size="projectTablePageSize = $event"
+							/>
 						</template>
 
 						<template v-else-if="activeSection === 'reports'">
 							<section class="report-page">
-								<section class="metrics-grid">
+								<section class="metrics-grid report-metrics-grid">
 									<el-card
 										v-for="card in reportSummaryCards"
 										:key="card.key"
@@ -1178,12 +524,12 @@
 									<template #header>
 										<div class="content-card__header">
 											<span>{{ reportTableTitle }}</span>
-											<el-tag type="primary" effect="plain">{{ filteredReports.length }} 条</el-tag>
+											<el-tag type="primary" effect="plain">{{ reportTableTotal }} 条</el-tag>
 										</div>
 									</template>
 									<div class="report-table-shell">
 										<el-table
-											v-if="filteredReports.length"
+											v-if="reportTableData.length"
 											:data="paginatedReports"
 											border
 											stripe
@@ -1216,7 +562,7 @@
 											</el-table-column>
 											<el-table-column label="操作" min-width="220" fixed="right" align="center">
 												<template #default="{ row }">
-													<div class="project-row-actions">
+													<div class="report-row-actions">
 														<el-button link type="primary" @click="openReportDetail(row)">详情</el-button>
 														<el-button
 															v-if="canCommentReport(row)"
@@ -1226,6 +572,17 @@
 														>
 															{{ row.status === '已批注' ? '修改批注' : '写批注' }}
 														</el-button>
+														<el-popconfirm
+															v-if="canDeleteReport(row)"
+															title="确认删除这篇今日日报吗？删除后可重新填写。"
+															confirm-button-text="删除"
+															cancel-button-text="取消"
+															@confirm="removeReport(row)"
+														>
+															<template #reference>
+																<el-button link type="danger">删除</el-button>
+															</template>
+														</el-popconfirm>
 													</div>
 												</template>
 											</el-table-column>
@@ -1241,14 +598,14 @@
 										</div>
 									</div>
 									<div class="employee-pagination">
-										<div class="employee-pagination__total">共 {{ filteredReports.length }} 条</div>
+										<div class="employee-pagination__total">共 {{ reportTableTotal }} 条</div>
 										<el-pagination
 											v-model:current-page="reportTablePage"
 											v-model:page-size="reportTablePageSize"
 											background
 											layout="prev, pager, next, sizes"
 											:page-sizes="[10, 20, 50]"
-											:total="filteredReports.length"
+											:total="reportTableTotal"
 										/>
 									</div>
 								</el-card>
@@ -1265,10 +622,10 @@
 								<el-scrollbar v-if="currentReportDetail" class="report-detail-scroll">
 									<div class="report-detail-grid">
 										<div class="report-detail-panel">
-											<div class="project-detail-panel__header">
+											<div class="report-detail-panel__header">
 												<div>
-													<div class="project-detail-panel__title">{{ currentReportDetail.title }}</div>
-													<div class="project-detail-panel__meta">
+													<div class="report-detail-panel__title">{{ currentReportDetail.title }}</div>
+													<div class="report-detail-panel__meta">
 														{{ currentReportDetail.employeeName }} / {{ currentReportDetail.department }} / {{ currentReportDetail.submitTime }}
 													</div>
 												</div>
@@ -1279,7 +636,18 @@
 											<div class="report-meta-grid">
 												<div class="report-meta-item">
 													<span>关联项目</span>
-													<strong>{{ currentReportDetail.relatedProject || '-' }}</strong>
+													<div v-if="currentReportRelatedProjects.length" class="report-project-links">
+														<button
+															v-for="project in currentReportRelatedProjects"
+															:key="project.id"
+															type="button"
+															class="report-project-link"
+															@click="openReportRelatedProject(project)"
+														>
+															{{ project.name }}
+														</button>
+													</div>
+													<strong v-else>-</strong>
 												</div>
 												<div class="report-meta-item">
 													<span>附件数量</span>
@@ -1302,9 +670,9 @@
 											</div>
 										</div>
 
-										<div class="project-detail-section">
-											<div class="project-detail-section__header">
-												<div class="project-detail-section__title">附件列表</div>
+										<div class="report-detail-section">
+											<div class="report-detail-section__header">
+												<div class="report-detail-section__title">附件列表</div>
 												<el-button
 													v-if="currentReportAttachments.length"
 													size="small"
@@ -1318,20 +686,20 @@
 											<div v-if="currentReportAttachments.length" class="report-attachment-list">
 												<button
 													v-for="(attachment, index) in currentReportAttachments"
-													:key="`${currentReportDetail.id}-${index}`"
+													:key="attachment?.key || attachment?.fileId || `${currentReportDetail.id}-${index}`"
 													type="button"
-													class="project-attachment-item"
+													class="report-attachment-item"
 													@click="downloadReportAttachment(currentReportDetail, attachment)"
 												>
 													<el-icon><Download /></el-icon>
-													<span>{{ attachment }}</span>
+													<span>{{ attachment?.fileName || attachment }}</span>
 												</button>
 											</div>
 											<el-empty v-else :image-size="72" description="当前日报暂无附件" />
 										</div>
 
-										<div class="project-detail-section">
-											<div class="project-detail-section__title">主管批注</div>
+										<div class="report-detail-section">
+											<div class="report-detail-section__title">主管批注</div>
 											<div v-if="currentReportDetail.leaderComment" class="report-comment-panel">
 												<div class="report-comment-panel__meta">
 													<span>{{ currentReportDetail.commentAuthor }}</span>
@@ -1359,6 +727,119 @@
 							</el-dialog>
 
 							<el-dialog
+								v-model="projectDetailVisible"
+								title="项目详情"
+								width="920px"
+								top="4vh"
+								class="report-detail-dialog"
+								append-to-body
+							>
+								<el-scrollbar v-if="currentProjectDetail" class="report-detail-scroll">
+									<div class="project-detail-grid">
+										<div class="project-detail-panel">
+											<div class="project-detail-panel__header">
+												<div>
+													<div class="project-detail-panel__title">{{ currentProjectDetail.projectName }}</div>
+													<div class="project-detail-panel__meta">
+														{{ currentProjectDetail.department }} / {{ currentProjectDetail.customerName }} / 截止 {{ currentProjectDetail.deadline }}
+													</div>
+												</div>
+												<el-tag :type="statusTagTypeMap[currentProjectDetail.status] || 'info'">
+													{{ currentProjectDetail.status }}
+												</el-tag>
+											</div>
+											<el-descriptions :column="2" border size="small" class="project-descriptions">
+												<el-descriptions-item label="客户联系方式">{{ currentProjectDetail.customerContact }}</el-descriptions-item>
+												<el-descriptions-item label="项目负责人">{{ currentProjectDetail.leader }}</el-descriptions-item>
+												<el-descriptions-item label="执行人">{{ currentProjectDetail.executor }}</el-descriptions-item>
+												<el-descriptions-item label="当前进度">{{ currentProjectDetail.progress }}%</el-descriptions-item>
+												<el-descriptions-item label="当前节点">{{ getProjectStageLabel(getProjectCurrentStageKey(currentProjectDetail)) || '任务下发' }}</el-descriptions-item>
+												<el-descriptions-item label="优先级">{{ currentProjectDetail.priority }}</el-descriptions-item>
+												<el-descriptions-item label="创建日期">{{ currentProjectDetail.createdAt }}</el-descriptions-item>
+												<el-descriptions-item label="项目描述" :span="2">
+													{{ getProjectDescription(currentProjectDetail) }}
+												</el-descriptions-item>
+											</el-descriptions>
+										</div>
+
+										<div class="project-detail-section">
+											<div class="project-detail-section__title">进度与审核记录</div>
+											<el-scrollbar v-if="projectTimelineEntries.length" class="project-timeline-scroll">
+												<el-timeline class="project-timeline">
+													<el-timeline-item
+														v-for="entry in projectTimelineEntries"
+														:key="entry.key"
+														:timestamp="entry.date"
+														placement="top"
+														:color="entry.color"
+													>
+														<el-card shadow="never" class="project-timeline-card">
+															<div class="project-timeline__head">
+																<strong>{{ entry.title }}</strong>
+																<el-tag size="small" effect="plain" :style="{ color: entry.color, borderColor: entry.color }">
+																	{{ entry.typeLabel }}
+																</el-tag>
+															</div>
+															<div class="project-timeline__desc">{{ entry.content }}</div>
+															<div v-if="entry.attachments?.length" class="project-timeline__attachments">
+																<div class="project-timeline__attachments-title">附件</div>
+																<div class="project-timeline__attachment-list">
+																	<button
+																		v-for="(attachment, attachmentIndex) in entry.attachments"
+																		:key="`${entry.key}-${attachmentIndex}`"
+																		type="button"
+																		class="project-timeline__attachment-item"
+																		@click="downloadProjectAttachment(currentProjectDetail, attachment, entry.title)"
+																	>
+																		<el-icon><Download /></el-icon>
+																		{{ attachment?.fileName || attachment }}
+																	</button>
+																</div>
+															</div>
+														</el-card>
+													</el-timeline-item>
+												</el-timeline>
+											</el-scrollbar>
+											<el-empty v-else :image-size="72" description="暂无进度记录" />
+										</div>
+
+										<div class="project-detail-section">
+											<div class="project-detail-section__header">
+												<div class="project-detail-section__title">附件列表</div>
+												<el-button
+													v-if="currentProjectAttachments.length"
+													size="small"
+													type="primary"
+													plain
+													@click="downloadAllProjectAttachments(currentProjectDetail)"
+												>
+													下载全部
+												</el-button>
+											</div>
+											<div v-if="currentProjectAttachments.length" class="project-attachment-list">
+												<button
+													v-for="(attachment, index) in currentProjectAttachments"
+													:key="attachment?.key || `${currentProjectDetail.id}-${index}`"
+													type="button"
+													class="project-attachment-item"
+													@click="downloadProjectAttachment(currentProjectDetail, attachment, '项目详情附件')"
+												>
+													<el-icon><Download /></el-icon>
+													<span>{{ attachment?.fileName || attachment }}</span>
+												</button>
+											</div>
+											<el-empty v-else :image-size="72" description="当前项目暂无附件" />
+										</div>
+									</div>
+								</el-scrollbar>
+								<template #footer>
+									<div class="dialog-footer">
+										<el-button @click="projectDetailVisible = false">关闭</el-button>
+									</div>
+								</template>
+							</el-dialog>
+
+							<el-dialog
 								v-model="reportFormVisible"
 								title="写今日日报"
 								width="720px"
@@ -1371,7 +852,7 @@
 									label-width="92px"
 									@submit.prevent
 								>
-									<div class="project-form-grid">
+									<div class="report-form-grid">
 										<el-form-item label="日期" prop="date">
 											<el-date-picker
 												v-model="reportForm.date"
@@ -1382,7 +863,14 @@
 											/>
 										</el-form-item>
 										<el-form-item label="关联项目">
-											<el-select v-model="reportForm.relatedProjectId" clearable :placeholder="reportProjectPlaceholder">
+											<el-select
+												v-model="reportForm.relatedProjectIds"
+												multiple
+												collapse-tags
+												collapse-tags-tooltip
+												clearable
+												:placeholder="reportProjectPlaceholder"
+											>
 												<el-option
 													v-for="option in reportProjectOptions"
 													:key="option.value"
@@ -1391,10 +879,10 @@
 												/>
 											</el-select>
 										</el-form-item>
-										<el-form-item class="project-form-grid__full" label="日报标题">
+										<el-form-item class="report-form-grid__full" label="日报标题">
 											<el-input v-model="reportForm.title" placeholder="默认自动生成 YYYY-MM-DD 日报，可手动覆盖" />
 										</el-form-item>
-										<el-form-item class="project-form-grid__full" label="今日工作" prop="workContent">
+										<el-form-item class="report-form-grid__full" label="今日工作" prop="workContent">
 											<el-input
 												v-model="reportForm.workContent"
 												type="textarea"
@@ -1402,7 +890,7 @@
 												placeholder="请输入今日工作内容"
 											/>
 										</el-form-item>
-										<el-form-item class="project-form-grid__full" label="明日计划" prop="tomorrowPlan">
+										<el-form-item class="report-form-grid__full" label="明日计划" prop="tomorrowPlan">
 											<el-input
 												v-model="reportForm.tomorrowPlan"
 												type="textarea"
@@ -1410,7 +898,7 @@
 												placeholder="请输入明日计划"
 											/>
 										</el-form-item>
-										<el-form-item class="project-form-grid__full" label="遇到的问题">
+										<el-form-item class="report-form-grid__full" label="遇到的问题">
 											<el-input
 												v-model="reportForm.problems"
 												type="textarea"
@@ -1418,7 +906,7 @@
 												placeholder="如无问题可留空"
 											/>
 										</el-form-item>
-										<el-form-item class="project-form-grid__full" label="附件">
+										<el-form-item class="report-form-grid__full" label="附件">
 											<el-upload
 												v-model:file-list="reportForm.attachmentFiles"
 												class="project-upload"
@@ -1432,7 +920,7 @@
 												</div>
 												<template #tip>
 													<div class="project-upload__tip">
-														仅做前端模拟展示，不上传到服务器；提交后会记录文件名到日报附件中。
+														支持 jpg、png、pdf、doc、docx、xls、xlsx，单个不超过 10MB，最多 10 个。
 													</div>
 												</template>
 											</el-upload>
@@ -1522,7 +1010,7 @@
 													</el-upload>
 													<el-button plain @click="resetSettingsAvatar">恢复默认</el-button>
 												</div>
-												<div class="settings-avatar__tip">支持 jpg/png/gif，最大 2MB，仅做前端模拟保存。</div>
+												<div class="settings-avatar__tip">支持 jpg/png/gif，最大 2MB</div>
 											</div>
 											<div class="settings-profile-meta">
 												<div class="settings-profile-meta__name">{{ currentUser.name }}</div>
@@ -1572,7 +1060,7 @@
 												</el-form-item>
 												<el-form-item class="settings-form-grid__full" label="说明">
 													<div class="settings-form-note">
-														当前页面仅开放联系方式与头像的前端模拟修改；姓名、部门、职位保持只读。
+														当前页面仅开放联系方式与头像修改；姓名、部门、职位保持只读。
 													</div>
 												</el-form-item>
 											</div>
@@ -1747,27 +1235,28 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import * as echarts from 'echarts';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { pinyin } from 'pinyin-pro';
 import { getPersonalCenterFocusState, updatePersonalCenterFocusState } from '../../api/personalCenterFocus';
 import {
 	getCurrentUser,
 	getOptions,
 	getDepartments,
 	getEmployees,
-	createDepartment,
-	createEmployee,
-	updateEmployee,
-	deleteEmployee,
 	getDepartmentExecutors,
 	getProjects,
 	getProject,
 	createProject,
+	uploadFilesWithProgress as apiUploadFilesWithProgress,
+	downloadFile as apiDownloadFile,
+	downloadProjectAttachments as apiDownloadProjectAttachments,
+	downloadReportAttachments as apiDownloadReportAttachments,
+	resolveAttachmentUrl,
 	submitProjectProgress as apiSubmitProjectProgress,
 	approveProject as apiApproveProject,
 	rejectProject as apiRejectProject,
 	getReports,
 	getReport,
 	createReport,
+	deleteReport,
 	getReportProjectOptions,
 	commentReport,
 	getSettings,
@@ -1787,8 +1276,9 @@ import {
 	UploadFilled,
 	User,
 } from '@element-plus/icons-vue';
+import EmployeeManagement from './EmployeeManagement.vue';
+import ProjectManagement from './ProjectManagement.vue';
 import {
-	PROJECT_STAGE_DEFINITIONS,
 	departments,
 	employees,
 	projects,
@@ -1796,8 +1286,6 @@ import {
 	roleSwitchOptions,
 	roleTestUserMap,
 	overviewRangeOptions,
-	employeeStatusOptions,
-	employeeRoleOptions,
 	projectStatusOptions,
 	projectPriorityOptions,
 	reportStatusOptions,
@@ -1824,9 +1312,12 @@ const roleLabelMap = Object.freeze({
 const ROLE_STORAGE_KEY = 'szkj:personal-center-role';
 const REPORT_DRAFT_STORAGE_KEY = 'szkj:personal-center-report-draft';
 const SETTINGS_AVATAR_STORAGE_KEY = 'szkj:personal-center-avatar';
-const DASHBOARD_TODAY = '2026-06-22';
-const REPORT_RUNTIME_TODAY = typeof window !== 'undefined' ? formatDate(new Date()) : DASHBOARD_TODAY;
+const REPORT_RUNTIME_TODAY = formatDate(new Date());
 const DAY_MS = 24 * 60 * 60 * 1000;
+const PROJECT_ATTACHMENT_MAX_COUNT = 10;
+const PROJECT_ATTACHMENT_MAX_SIZE = 50 * 1024 * 1024;
+const PROJECT_ATTACHMENT_MAX_TOTAL_SIZE = 200 * 1024 * 1024;
+const PROJECT_ATTACHMENT_ACCEPTED_EXTENSIONS = ['.jpg', '.png', '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.zip'];
 const UPCOMING_PROJECT_VISIBLE_COUNT = 8;
 const ADMIN_PROGRESS_FEED_VISIBLE_COUNT = 5;
 const ADMIN_PROGRESS_FEED_ROW_HEIGHT = 126;
@@ -1862,6 +1353,28 @@ const apiData = reactive({
 	options: null, // 字典选项
 	settings: null, // 个人设置
 });
+const projectListState = reactive({
+	items: [],
+	total: 0,
+	pageIndex: 1,
+	pageSize: 10,
+	metrics: null,
+	cache: [],
+});
+const reportListState = reactive({
+	items: [],
+	total: 0,
+	pageIndex: 1,
+	pageSize: 10,
+	totalPages: 0,
+	metrics: null,
+	todayReport: null,
+	canWriteToday: null,
+});
+const overviewRealtimeStats = reactive({
+	todaySubmitted: null,
+	expectedCount: null,
+});
 
 // 标记是否已加载过API数据
 const apiDataLoaded = reactive({
@@ -1872,6 +1385,14 @@ const apiDataLoaded = reactive({
 	overview: false,
 	options: false,
 	settings: false,
+});
+
+// 标记API数据是否正在加载中
+const apiDataLoading = reactive({
+	departments: false,
+	employees: false,
+	projects: false,
+	reports: false,
 });
 
 let projectStatusChartInstance = null;
@@ -1898,6 +1419,69 @@ function safeGet(value, defaultValue = '') {
 function safeArray(value) {
 	if (!Array.isArray(value)) return [];
 	return value;
+}
+
+function normalizeOptionalBoolean(value) {
+	if (value === true || value === false) return value;
+	if (value === 'true') return true;
+	if (value === 'false') return false;
+	return undefined;
+}
+
+function looksLikeIsoDateString(value) {
+	if (typeof value !== 'string') return false;
+	const normalized = value.trim();
+	return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(normalized);
+}
+
+function normalizeApiDateLike(value, { withTime = false } = {}) {
+	const raw = String(safeGet(value, '')).trim();
+	if (!raw) return '';
+	if (!looksLikeIsoDateString(raw)) return raw;
+	const [datePart, timePart = ''] = raw.split('T');
+	const normalizedTime = timePart.slice(0, 5);
+	if (!withTime) return datePart;
+	if (!normalizedTime || normalizedTime === '00:00') return datePart;
+	return `${datePart} ${normalizedTime}`;
+}
+
+/**
+ * 处理 API 调用错误，显示友好的错误提示
+ * @param {Error} error 错误对象
+ * @param {string} fallbackMsg 默认错误提示
+ * @returns {boolean} 是否已处理错误（返回true表示错误已被处理）
+ */
+function handleApiError(error, fallbackMsg = '操作失败，请稍后重试') {
+	// 业务错误码错误（已在 request.js 中处理）
+	if (error.isBusinessError) {
+		ElMessage.error(error.message);
+		return true;
+	}
+
+	// HTTP 错误
+	if (error.status === 401) {
+		// 401 已在 request.js 中处理跳转，此处不重复提示
+		return false;
+	}
+
+	if (error.status === 403) {
+		ElMessage.error('您没有权限执行此操作');
+		return true;
+	}
+
+	if (error.status === 404) {
+		ElMessage.error('请求的数据不存在');
+		return true;
+	}
+
+	if (error.status === 0) {
+		ElMessage.error('网络异常，请检查网络连接后重试');
+		return true;
+	}
+
+	// 其他错误
+	ElMessage.error(error.message || fallbackMsg);
+	return true;
 }
 
 const currentUserApiData = ref({
@@ -1962,19 +1546,14 @@ const sectionDefinitions = [
 
 const activeSection = ref('overview');
 const sectionLoading = ref(false);
-const employeeTablePage = ref(1);
-const employeeTablePageSize = ref(10);
-const employeeDialogVisible = ref(false);
-const employeeDialogMode = ref('create');
-const employeeFormRef = ref(null);
-const employeeUserNameTouched = ref(false);
-const departmentDialogVisible = ref(false);
-const departmentFormRef = ref(null);
 const projectTablePage = ref(1);
 const projectTablePageSize = ref(10);
 const projectDetailVisible = ref(false);
 const projectFormVisible = ref(false);
 const projectProgressVisible = ref(false);
+const projectUploadProgressVisible = ref(false);
+const projectUploadProgress = ref(0);
+const projectUploadProgressText = ref('准备上传附件...');
 const reportTablePage = ref(1);
 const reportTablePageSize = ref(10);
 const reportDetailVisible = ref(false);
@@ -1984,15 +1563,13 @@ const projectFormRef = ref(null);
 const projectProgressFormRef = ref(null);
 const reportFormRef = ref(null);
 const reportCommentFormRef = ref(null);
+
+// 子组件 ref
+const projectManagementRef = ref(null);
 const settingsFormRef = ref(null);
 const activeProjectId = ref('');
 const activeReportId = ref('');
 const settingsAvatarState = reactive({});
-const employeeFilters = reactive({
-	keyword: '',
-	department: '',
-	status: '',
-});
 const projectFilters = reactive({
 	keyword: '',
 	status: '',
@@ -2005,22 +1582,6 @@ const reportFilters = reactive({
 	status: '',
 	department: '',
 	dateRange: [],
-});
-const employeeForm = reactive({
-	id: '',
-	name: '',
-	userName: '',
-	phone: '',
-	email: '',
-	department: '',
-	position: '',
-	password: 'Qaz!123',
-	status: '在职',
-	role: 'employee',
-	roleName: '员工',
-});
-const departmentForm = reactive({
-	name: '',
 });
 const projectForm = reactive({
 	department: '',
@@ -2044,7 +1605,7 @@ const reportForm = reactive({
 	id: '',
 	date: REPORT_RUNTIME_TODAY,
 	title: '',
-	relatedProjectId: '',
+	relatedProjectIds: [],
 	workContent: '',
 	tomorrowPlan: '',
 	problems: '',
@@ -2058,85 +1619,6 @@ const settingsForm = reactive({
 	phone: '',
 	email: '',
 });
-const employeeRules = {
-	name: [
-		{ required: true, message: '请输入员工姓名', trigger: 'blur' },
-		{ min: 2, max: 20, message: '姓名长度需在 2-20 个字符之间', trigger: 'blur' },
-	],
-	phone: [
-		{ required: true, message: '请输入联系电话', trigger: 'blur' },
-		{ pattern: /^1\d{10}$/, message: '请输入正确的手机号格式', trigger: 'blur' },
-	],
-	email: [
-		{ type: 'email', message: '请输入正确的邮箱格式', trigger: ['blur', 'change'] },
-	],
-	department: [
-		{ required: true, message: '请选择所属部门', trigger: 'change' },
-	],
-	position: [
-		{ required: true, message: '请输入职位', trigger: 'blur' },
-		{ min: 2, max: 30, message: '职位长度需在 2-30 个字符之间', trigger: 'blur' },
-	],
-	userName: [
-		{
-			validator: (_, value, callback) => {
-				if (employeeDialogMode.value !== 'create' && !value) {
-					callback();
-					return;
-				}
-				if (!value) {
-					callback(new Error('请输入账号'));
-					return;
-				}
-				if (!/^[a-z0-9._-]{3,30}$/i.test(String(value))) {
-					callback(new Error('账号支持 3-30 位字母、数字、点、下划线或中划线'));
-					return;
-				}
-				callback();
-			},
-			trigger: 'blur',
-		},
-	],
-	password: [
-		{
-			validator: (_, value, callback) => {
-				if (employeeDialogMode.value !== 'create') {
-					callback();
-					return;
-				}
-				if (!value) {
-					callback(new Error('新增员工时请输入密码'));
-					return;
-				}
-				if (String(value).length < 6) {
-					callback(new Error('密码长度至少 6 位'));
-					return;
-				}
-				callback();
-			},
-			trigger: 'blur',
-		},
-	],
-};
-const departmentRules = {
-	name: [
-		{ required: true, message: '请输入部门名称', trigger: 'blur' },
-		{
-			validator: (_, value, callback) => {
-				if (!value) {
-					callback();
-					return;
-				}
-				if (departments.includes(String(value).trim())) {
-					callback(new Error('部门名称已存在'));
-					return;
-				}
-				callback();
-			},
-			trigger: 'blur',
-		},
-	],
-};
 const projectRules = {
 	department: [
 		{ required: true, message: '请选择所属部门', trigger: 'change' },
@@ -2232,25 +1714,27 @@ const visibleSections = computed(() => {
 const currentSection = computed(() => {
 	return visibleSections.value.find((item) => item.key === activeSection.value) || visibleSections.value[0];
 });
-const employeeDepartmentOptions = computed(() => {
-	if (currentRole.value === ROLE_ENUM.MANAGER) {
-		return [currentUser.value.department];
-	}
-	// 优先使用API部门数据
-	if (apiData.departments.length > 0) {
-		return apiData.departments.map(d => d.name);
-	}
-	return departments;
-});
+
+// 用于项目管理表单联动的部门选项
 const projectDepartmentOptions = computed(() => {
 	if (currentRole.value === ROLE_ENUM.MANAGER) {
 		return [currentUser.value.department];
 	}
-	// 优先使用API部门数据
-	if (apiData.departments.length > 0) {
-		return apiData.departments.map(d => d.name);
+	// 只使用API部门数据
+	if (apiData.departments.length === 0) {
+		return [];
 	}
-	return departments;
+	const apiDepartments = apiData.departments.map(d => d.name);
+
+	// 如果选择了执行人，只显示该执行人所属的部门
+	if (projectForm.executor) {
+		const executorEmployee = projectExecutorEmployees.value.find(e => e.name === projectForm.executor);
+		if (executorEmployee) {
+			return apiDepartments.filter(dept => dept === executorEmployee.department);
+		}
+	}
+
+	return apiDepartments;
 });
 const reportDepartmentOptions = computed(() => {
 	if (currentRole.value === ROLE_ENUM.MANAGER) {
@@ -2262,10 +1746,27 @@ const reportDepartmentOptions = computed(() => {
 	}
 	return departments;
 });
+
+// 用于项目管理表单的执行人选项，只使用API员工数据
+const projectExecutorEmployees = computed(() => {
+	// 只使用API员工数据
+	return apiData.employees;
+});
+
 const availableProjectExecutors = computed(() => {
+	// 只使用API员工数据
+	const employeeList = projectExecutorEmployees.value;
+	if (employeeList.length === 0) {
+		return [];
+	}
+
+	// 如果选择了部门，只显示该部门的员工
 	const department = projectForm.department || (currentRole.value === ROLE_ENUM.MANAGER ? currentUser.value.department : '');
-	return employees.filter((item) => {
-		return item.role === ROLE_ENUM.EMPLOYEE
+
+	return employeeList.filter((item) => {
+		// 允许部门主管(ROLE_ENUM.MANAGER)和员工(ROLE_ENUM.EMPLOYEE)作为执行人
+		const isValidRole = item.role === ROLE_ENUM.MANAGER || item.role === ROLE_ENUM.EMPLOYEE;
+		return isValidRole
 			&& item.status !== '离职'
 			&& (!department || item.department === department);
 	});
@@ -2279,27 +1780,9 @@ const reportProjectOptions = computed(() => {
 	}));
 });
 const reportProjectPlaceholder = computed(() => currentRole.value === ROLE_ENUM.MANAGER ? '可选关联本部门项目' : '可选关联我的项目');
-const filteredEmployees = computed(() => {
-	const keyword = employeeFilters.keyword.trim().toLowerCase();
-	return scopedEmployees.value.filter((item) => {
-		const matchesKeyword = !keyword
-			|| item.name.toLowerCase().includes(keyword)
-			|| item.phone.includes(keyword)
-			|| item.email.toLowerCase().includes(keyword)
-			|| item.position.toLowerCase().includes(keyword);
-		const matchesDepartment = !employeeFilters.department || item.department === employeeFilters.department;
-		const matchesStatus = !employeeFilters.status || item.status === employeeFilters.status;
-		return matchesKeyword && matchesDepartment && matchesStatus;
-	});
-});
-const paginatedEmployees = computed(() => {
-	const start = (employeeTablePage.value - 1) * employeeTablePageSize.value;
-	return filteredEmployees.value.slice(start, start + employeeTablePageSize.value);
-});
-const employeeDialogTitle = computed(() => employeeDialogMode.value === 'create' ? '新增员工' : '编辑员工');
 const filteredProjects = computed(() => {
 	const keyword = projectFilters.keyword.trim().toLowerCase();
-	return scopedProjects.value.filter((item) => {
+	return (projectListState.items.length ? projectListState.items : scopedProjects.value).filter((item) => {
 		const matchesKeyword = !keyword
 			|| item.projectName.toLowerCase().includes(keyword)
 			|| item.customerName.toLowerCase().includes(keyword)
@@ -2312,13 +1795,45 @@ const filteredProjects = computed(() => {
 		return matchesKeyword && matchesStatus && matchesPriority && matchesProgress && matchesDepartment;
 	});
 });
-const paginatedProjects = computed(() => {
-	const start = (projectTablePage.value - 1) * projectTablePageSize.value;
-	return filteredProjects.value.slice(start, start + projectTablePageSize.value);
+const projectStatusDistributionMap = computed(() => {
+	const distribution = safeArray(apiData.overview?.projectStatusDistribution);
+	return distribution.reduce((map, item) => {
+		const name = String(safeGet(item?.name || item?.label, '')).trim();
+		if (!name) return map;
+		map[name] = {
+			count: Number(item?.value) || 0,
+			percent: Number(item?.percent) || 0,
+		};
+		return map;
+	}, {});
 });
+const overviewReportStats = computed(() => {
+	return apiData.overview?.reportStats
+		|| apiData.overview?.reports
+		|| apiData.overview?.reportOverviewStats
+		|| null;
+});
+const overviewProjectTotal = computed(() => {
+	if (apiData.overview?.summaryCards?.length) {
+		const projectCard = findOverviewSummaryCard(['totalProjects', 'deptProjects', 'myProjects', 'projects']);
+		const cardValue = parseMetricNumber(projectCard?.value ?? projectCard?.count);
+		if (cardValue !== null) return cardValue;
+	}
+	const distributionTotal = Object.values(projectStatusDistributionMap.value).reduce((sum, item) => {
+		return sum + Number(item?.count || 0);
+	}, 0);
+	if (distributionTotal > 0) return distributionTotal;
+	return scopedProjects.value.length;
+});
+const paginatedProjects = computed(() => filteredProjects.value);
 const filteredPendingReviewProjects = computed(() => filteredProjects.value.filter((item) => item.status === '待审核'));
 const filteredActiveProjects = computed(() => filteredProjects.value.filter((item) => item.status === '进行中'));
 const filteredCompletedProjects = computed(() => filteredProjects.value.filter((item) => item.status === '已完成'));
+const projectMetrics = computed(() => projectListState.metrics || null);
+const projectTableTotal = computed(() => {
+	if (projectListState.total > 0) return projectListState.total;
+	return filteredProjects.value.length;
+});
 const filteredAverageProjectProgress = computed(() => {
 	if (!filteredProjects.value.length) return 0;
 	const total = filteredProjects.value.reduce((sum, item) => sum + Number(item.progress || 0), 0);
@@ -2339,7 +1854,10 @@ const projectTableTitle = computed(() => {
 	return '我的项目';
 });
 const currentProjectDetail = computed(() => {
-	return projects.find((item) => item.id === activeProjectId.value) || null;
+	// 优先从API数据中查找，如果没有则从模拟数据中查找
+	return apiData.projects.find((item) => item.id === activeProjectId.value)
+		|| projects.find((item) => item.id === activeProjectId.value)
+		|| null;
 });
 const currentProjectAttachments = computed(() => {
 	return currentProjectDetail.value ? getProjectAttachmentList(currentProjectDetail.value) : [];
@@ -2347,21 +1865,38 @@ const currentProjectAttachments = computed(() => {
 const currentUserAvatar = computed(() => settingsAvatarState[currentUser.value.id] || '');
 const settingsAvatarPreview = computed(() => currentUserAvatar.value);
 const currentReportDetail = computed(() => {
-	return reports.find((item) => item.id === activeReportId.value) || null;
+	return apiData.reports.find((item) => item.id === activeReportId.value)
+		|| reports.find((item) => item.id === activeReportId.value)
+		|| null;
 });
 const currentReportAttachments = computed(() => {
 	return currentReportDetail.value ? getReportAttachmentList(currentReportDetail.value) : [];
 });
+const currentReportRelatedProjects = computed(() => {
+	if (!currentReportDetail.value) return [];
+	const projectIds = normalizeReportRelatedProjectIds(currentReportDetail.value);
+	const relatedNames = splitRelatedProjectNames(currentReportDetail.value.relatedProject);
+	return projectIds.map((projectId, index) => {
+		const project = findProjectById(projectId);
+		return {
+			id: projectId,
+			name: project?.projectName || relatedNames[index] || projectId,
+			project,
+		};
+	});
+});
 const progressTargetProject = computed(() => {
-	return projectProgressForm.projectId
-		? projects.find((item) => item.id === projectProgressForm.projectId) || null
-		: null;
+	if (!projectProgressForm.projectId) return null;
+	// 优先从API数据中查找
+	return apiData.projects.find((item) => item.id === projectProgressForm.projectId)
+		|| projects.find((item) => item.id === projectProgressForm.projectId)
+		|| null;
 });
 const projectProgressBaseline = computed(() => Number(progressTargetProject.value?.progress || 0));
 const projectProgressCurrentStageKey = computed(() => getProjectCurrentStageKey(progressTargetProject.value));
 const projectProgressStageOptions = computed(() => getAvailableProjectStageOptions(progressTargetProject.value));
 const selectedProjectProgressStage = computed(() => {
-	return PROJECT_STAGE_DEFINITIONS.find((item) => item.key === projectProgressForm.stageKey) || null;
+	return projectProgressStageOptions.value.find((item) => item.key === projectProgressForm.stageKey) || null;
 });
 const projectProgressRange = computed(() => {
 	const stage = selectedProjectProgressStage.value;
@@ -2422,6 +1957,9 @@ const scopedReports = computed(() => {
 	}
 	return data.filter((item) => item.employeeId === currentUser.value.id);
 });
+const reportTableData = computed(() => {
+	return reportListState.items.length ? reportListState.items : filteredReports.value;
+});
 const selectedReportDepartment = computed(() => {
 	if (currentRole.value === ROLE_ENUM.MANAGER) return currentUser.value.department;
 	if (currentRole.value === ROLE_ENUM.ADMIN) return reportFilters.department || '';
@@ -2479,8 +2017,14 @@ const filteredReports = computed(() => {
 	return reportMetricsScope.value.filter((item) => item.status === reportFilters.status);
 });
 const paginatedReports = computed(() => {
+	if (reportListState.items.length) return reportListState.items;
 	const start = (reportTablePage.value - 1) * reportTablePageSize.value;
 	return filteredReports.value.slice(start, start + reportTablePageSize.value);
+});
+const reportMetrics = computed(() => reportListState.metrics || null);
+const reportTableTotal = computed(() => {
+	if (reportListState.total > 0 || reportListState.items.length) return reportListState.total;
+	return filteredReports.value.length;
 });
 const reportPendingCount = computed(() => reportMetricsScope.value.filter((item) => item.status === '已提交').length);
 const reportCommentedCount = computed(() => reportMetricsScope.value.filter((item) => item.status === '已批注').length);
@@ -2492,9 +2036,35 @@ const reportWeeklySubmitRate = computed(() => {
 });
 const currentEmployeeTodayReport = computed(() => {
 	if (!canWriteReport.value) return null;
-	return reports.find((item) => item.employeeId === currentUser.value.id && item.submitDate === REPORT_RUNTIME_TODAY) || null;
+	if (reportListState.todayReport?.id && isReportOwnedByCurrentUser(reportListState.todayReport)) {
+		return reportListState.todayReport;
+	}
+	const matchesCurrentUserToday = (item) => isReportOwnedByCurrentUser(item) && getReportSubmitDate(item) === REPORT_RUNTIME_TODAY;
+	return apiData.reports.find(matchesCurrentUserToday) || reports.find(matchesCurrentUserToday) || null;
 });
 const reportSummaryCards = computed(() => {
+	if (reportMetrics.value) {
+		const todaySubmitted = Number(reportMetrics.value.todaySubmitted || 0);
+		const pendingCommentCount = Number(reportMetrics.value.pendingCommentCount || 0);
+		const commentedCount = Number(reportMetrics.value.commentedCount || 0);
+		const submitRate = Number(reportMetrics.value.submitRate || 0);
+		const actualSubmitCount = Number(reportMetrics.value.actualSubmitCount || 0);
+		const expectedSubmitCount = Number(reportMetrics.value.expectedSubmitCount || 0);
+		if (currentRole.value === ROLE_ENUM.EMPLOYEE) {
+			return [
+				{ key: 'today', label: '今日日报状态', value: currentEmployeeTodayReport.value ? currentEmployeeTodayReport.value.status : '待提交', hint: currentEmployeeTodayReport.value ? `已于 ${currentEmployeeTodayReport.value.submitTime} 提交，提交后不可修改` : '今天还没有提交日报' },
+				{ key: 'history', label: '历史日报数', value: `${reportTableTotal.value} 条`, hint: '仅展示当前员工可见的历史记录' },
+				{ key: 'commented', label: '已批注日报', value: `${commentedCount} 条`, hint: '主管批注后会在历史列表中同步显示' },
+				{ key: 'rate', label: '本周提交率', value: `${submitRate}%`, hint: `本周已提交 ${actualSubmitCount} / ${expectedSubmitCount || 0} 次` },
+			];
+		}
+		return [
+			{ key: 'today', label: '今日提交数', value: `${todaySubmitted} 条`, hint: `${todaySubmitted} 名员工今日已提交日报` },
+			{ key: 'pending', label: '待批注', value: `${pendingCommentCount} 条`, hint: '优先处理状态为已提交的日报' },
+			{ key: 'commented', label: '已批注', value: `${commentedCount} 条`, hint: '当前筛选范围内已完成批注的日报' },
+			{ key: 'rate', label: '本周提交率', value: `${submitRate}%`, hint: `本周已提交 ${actualSubmitCount} / ${expectedSubmitCount || 0} 次` },
+		];
+	}
 	if (currentRole.value === ROLE_ENUM.EMPLOYEE) {
 		return [
 			{ key: 'today', label: '今日日报状态', value: currentEmployeeTodayReport.value ? currentEmployeeTodayReport.value.status : '待提交', hint: currentEmployeeTodayReport.value ? `已于 ${currentEmployeeTodayReport.value.submitTime} 提交，提交后不可修改` : '今天还没有提交日报' },
@@ -2517,7 +2087,7 @@ const reportTableTitle = computed(() => {
 });
 const reportPrimaryActionLabel = computed(() => currentEmployeeTodayReport.value ? '今日日报已提交' : '写今日日报');
 
-const dashboardTodayLabel = computed(() => DASHBOARD_TODAY);
+const dashboardTodayLabel = computed(() => REPORT_RUNTIME_TODAY);
 const overviewRangeDays = computed(() => {
 	if (overviewRange.value === '30d') return 30;
 	if (overviewRange.value === 'month') return 31;
@@ -2528,15 +2098,58 @@ const overviewRangeLabel = computed(() => {
 	return option?.label || '近 7 天';
 });
 const reportsInRange = computed(() => scopedReports.value.filter((item) => isWithinDays(item.submitDate, overviewRangeDays.value)));
+const overviewRangeReportCount = computed(() => {
+	const statsValue = parseMetricNumber(overviewReportStats.value?.rangeReportCount);
+	return statsValue !== null ? statsValue : reportsInRange.value.length;
+});
 const submittedEmployeeIdsToday = computed(() => {
 	return new Set(
 		scopedReports.value
-			.filter((item) => item.submitDate === DASHBOARD_TODAY)
+			.filter((item) => getReportSubmitDate(item) === REPORT_RUNTIME_TODAY)
 			.map((item) => item.employeeId)
 	);
 });
 const todaySubmittedReportsCount = computed(() => submittedEmployeeIdsToday.value.size);
-const todayReportRate = computed(() => toPercent(todaySubmittedReportsCount.value, scopedEmployees.value.length));
+const overviewTodaySubmittedReportsCount = computed(() => {
+	if (overviewRealtimeStats.todaySubmitted !== null) return overviewRealtimeStats.todaySubmitted;
+	const statsValue = parseMetricNumber(overviewReportStats.value?.todaySubmitted);
+	if (statsValue !== null) return statsValue;
+	const card = findOverviewSummaryCard(['todayReports']);
+	const cardValue = parseMetricFraction(card?.hint)?.current ?? null;
+	return cardValue !== null ? cardValue : todaySubmittedReportsCount.value;
+});
+const overviewPendingReportsCount = computed(() => {
+	if (overviewRealtimeStats.todaySubmitted !== null && overviewRealtimeStats.expectedCount !== null) {
+		return Math.max(0, overviewRealtimeStats.expectedCount - overviewRealtimeStats.todaySubmitted);
+	}
+	const statsValue = parseMetricNumber(overviewReportStats.value?.pending);
+	if (statsValue !== null) return statsValue;
+	const card = findOverviewSummaryCard(['todayReports', 'deptReports']);
+	const cardFraction = parseMetricFraction(card?.hint);
+	if (cardFraction?.total !== null && cardFraction?.current !== null) {
+		return Math.max(0, cardFraction.total - cardFraction.current);
+	}
+	return Math.max(scopedEmployees.value.length - todaySubmittedReportsCount.value, 0);
+});
+const overviewReportExpectedCount = computed(() => {
+	if (overviewRealtimeStats.expectedCount !== null) return overviewRealtimeStats.expectedCount;
+	const fromStats = overviewTodaySubmittedReportsCount.value + overviewPendingReportsCount.value;
+	if (fromStats > 0) return fromStats;
+	const card = findOverviewSummaryCard(['todayReports', 'deptReports']);
+	const cardTotal = parseMetricFraction(card?.hint)?.total ?? null;
+	return cardTotal !== null ? cardTotal : scopedEmployees.value.length;
+});
+const todayReportRate = computed(() => {
+	if (overviewRealtimeStats.todaySubmitted !== null && overviewRealtimeStats.expectedCount) {
+		return toPercent(overviewRealtimeStats.todaySubmitted, overviewRealtimeStats.expectedCount);
+	}
+	const statsRate = normalizePercentValue(overviewReportStats.value?.submitRate);
+	if (statsRate !== null) return statsRate;
+	const card = findOverviewSummaryCard(['deptReports', 'submissionRate']) || findOverviewSummaryCard(['todayReports']);
+	const cardRate = String(card?.value || '').includes('%') ? normalizePercentValue(card?.value) : null;
+	if (cardRate !== null) return cardRate;
+	return toPercent(overviewTodaySubmittedReportsCount.value, overviewReportExpectedCount.value);
+});
 const pendingReviewProjects = computed(() => scopedProjects.value.filter((item) => item.status === '待审核'));
 const activeProjects = computed(() => scopedProjects.value.filter((item) => item.status === '进行中'));
 const completedProjects = computed(() => scopedProjects.value.filter((item) => item.status === '已完成'));
@@ -2546,7 +2159,15 @@ const averageProjectProgress = computed(() => {
 	return Math.round(total / scopedProjects.value.length);
 });
 const projectStatusItems = computed(() => {
-	const total = scopedProjects.value.length;
+	const total = overviewProjectTotal.value;
+	const distributionMap = projectStatusDistributionMap.value;
+	if (Object.keys(distributionMap).length > 0) {
+		return [
+			{ key: 'pending', label: '待审核', count: Number(distributionMap['待审核']?.count || 0), color: '#f59e0b', percent: Number(distributionMap['待审核']?.percent || toPercent(distributionMap['待审核']?.count || 0, total)) },
+			{ key: 'active', label: '进行中', count: Number(distributionMap['进行中']?.count || 0), color: '#0ea5e9', percent: Number(distributionMap['进行中']?.percent || toPercent(distributionMap['进行中']?.count || 0, total)) },
+			{ key: 'completed', label: '已完成', count: Number(distributionMap['已完成']?.count || 0), color: '#10b981', percent: Number(distributionMap['已完成']?.percent || toPercent(distributionMap['已完成']?.count || 0, total)) },
+		];
+	}
 	return [
 				{ key: 'pending', label: '待审核', count: pendingReviewProjects.value.length, color: '#f59e0b', percent: toPercent(pendingReviewProjects.value.length, total) },
 				{ key: 'active', label: '进行中', count: activeProjects.value.length, color: '#0ea5e9', percent: toPercent(activeProjects.value.length, total) },
@@ -2584,6 +2205,18 @@ const departmentEmployeeStats = computed(() => {
 		.filter((item) => item.count > 0);
 });
 const personalReportStats = computed(() => {
+	if (overviewReportStats.value) {
+		const submittedDays = parseMetricNumber(overviewReportStats.value.submittedDays);
+		const pendingDays = parseMetricNumber(overviewReportStats.value.pendingDays);
+		const rangeReportCount = parseMetricNumber(overviewReportStats.value.rangeReportCount);
+		const submitRate = normalizePercentValue(overviewReportStats.value.submitRate);
+		return {
+			submittedDays: submittedDays ?? rangeReportCount ?? 0,
+			pendingDays: pendingDays ?? Math.max(overviewRangeDays.value - (submittedDays ?? rangeReportCount ?? 0), 0),
+			todayStatus: safeGet(overviewReportStats.value.todayStatus, todaySubmittedReportsCount.value > 0 ? '已提交' : '待提交'),
+			rate: submitRate ?? toPercent(submittedDays ?? rangeReportCount ?? 0, overviewRangeDays.value),
+		};
+	}
 	const submittedDays = new Set(reportsInRange.value.map((item) => item.submitDate)).size;
 	const totalDays = overviewRangeDays.value;
 	const pendingDays = Math.max(totalDays - submittedDays, 0);
@@ -2647,20 +2280,25 @@ const projectTrendDescription = computed(() => {
 	return `${overviewRangeLabel.value}内按日期统计项目推进次数，折线同步展示当日平均推进进度。`;
 });
 const overviewSummaryCards = computed(() => {
+	// 接口返回真实数据时优先使用
+	if (apiData.overview?.summaryCards?.length) {
+		return apiData.overview.summaryCards;
+	}
+
 	if (currentRole.value === ROLE_ENUM.ADMIN) {
 		return [
 			{ key: 'employees', label: '员工总数', value: `${scopedEmployees.value.length} 人`, hint: `覆盖 ${departments.length} 个部门的测试样本` },
-			{ key: 'projects', label: '项目总数', value: `${scopedProjects.value.length} 个`, hint: `其中 ${pendingReviewProjects.value.length} 个待审核项目` },
+			{ key: 'projects', label: '项目总数', value: `${overviewProjectTotal.value} 个`, hint: `其中 ${pendingReviewProjects.value.length} 个待审核项目` },
 			{ key: 'active', label: '进行中项目', value: `${activeProjects.value.length} 个`, hint: `未来 7 天内 ${upcomingProjects.value.length} 个项目到期` },
-			{ key: 'reports', label: '今日日报提交率', value: `${todayReportRate.value}%`, hint: `${todaySubmittedReportsCount.value} / ${scopedEmployees.value.length || 0} 人已提交日报` },
+			{ key: 'reports', label: '今日日报提交率', value: `${todayReportRate.value}%`, hint: `${overviewTodaySubmittedReportsCount.value} / ${overviewReportExpectedCount.value || 0} 人已提交日报` },
 		];
 	}
 	if (currentRole.value === ROLE_ENUM.MANAGER) {
 		return [
 			{ key: 'employees', label: '部门员工数', value: `${scopedEmployees.value.length} 人`, hint: `当前部门：${currentUser.value.department}` },
-			{ key: 'projects', label: '部门项目数', value: `${scopedProjects.value.length} 个`, hint: `本部门有 ${pendingReviewProjects.value.length} 个待审核项目` },
+			{ key: 'projects', label: '部门项目数', value: `${overviewProjectTotal.value} 个`, hint: `本部门有 ${pendingReviewProjects.value.length} 个待审核项目` },
 			{ key: 'completion', label: '项目完成率', value: `${toPercent(completedProjects.value.length, scopedProjects.value.length)}%`, hint: `${completedProjects.value.length} / ${scopedProjects.value.length || 0} 个项目已完成` },
-			{ key: 'reports', label: '部门日报提交率', value: `${todayReportRate.value}%`, hint: `${todaySubmittedReportsCount.value} / ${scopedEmployees.value.length || 0} 人今日已提交日报` },
+			{ key: 'reports', label: '部门日报提交率', value: `${todayReportRate.value}%`, hint: `${overviewTodaySubmittedReportsCount.value} / ${overviewReportExpectedCount.value || 0} 人今日已提交日报` },
 		];
 	}
 	return [
@@ -2671,6 +2309,35 @@ const overviewSummaryCards = computed(() => {
 	];
 });
 const projectSummaryCards = computed(() => {
+	if (projectMetrics.value) {
+		const totalProjects = Number(projectMetrics.value.totalProjects || projectTableTotal.value || 0);
+		const pendingReviewCount = Number(projectMetrics.value.pendingReviewProjects || 0);
+		const activeCount = Number(projectMetrics.value.activeProjects || 0);
+		const completedCount = Number(projectMetrics.value.completedProjects || 0);
+		const upcomingCount = Number(projectMetrics.value.upcomingProjects || 0);
+		if (currentRole.value === ROLE_ENUM.ADMIN) {
+			return [
+				{ key: 'total', label: '全部项目', value: `${totalProjects} 个`, hint: `当前筛选结果覆盖 ${totalProjects} 个项目` },
+				{ key: 'pending', label: '待审核项目', value: `${pendingReviewCount} 个`, hint: '管理员可直接跨部门审核完成项目' },
+				{ key: 'active', label: '进行中项目', value: `${activeCount} 个`, hint: `当前筛选结果中 ${upcomingCount} 个项目 7 天内到期` },
+				{ key: 'completed', label: '已完成项目', value: `${completedCount} 个`, hint: `当前筛选完成率 ${toPercent(completedCount, totalProjects)}%` },
+			];
+		}
+		if (currentRole.value === ROLE_ENUM.MANAGER) {
+			return [
+				{ key: 'total', label: '本部门项目', value: `${totalProjects} 个`, hint: `当前部门：${currentUser.value.department}` },
+				{ key: 'pending', label: '待审核项目', value: `${pendingReviewCount} 个`, hint: '待管理员最终审核通过后才会结束任务' },
+				{ key: 'active', label: '进行中项目', value: `${activeCount} 个`, hint: `${availableProjectExecutors.value.length} 名可分配执行员工` },
+				{ key: 'completed', label: '完成率', value: `${toPercent(completedCount, totalProjects)}%`, hint: `${completedCount} / ${totalProjects} 个项目已完成` },
+			];
+		}
+		return [
+			{ key: 'total', label: '我的项目', value: `${totalProjects} 个`, hint: `其中 ${pendingReviewCount} 个等待管理员审核` },
+			{ key: 'active', label: '进行中项目', value: `${activeCount} 个`, hint: '可继续提交阶段性进度' },
+			{ key: 'completed', label: '已完成项目', value: `${completedCount} 个`, hint: `当前完成率 ${toPercent(completedCount, totalProjects)}%` },
+			{ key: 'upcoming', label: '即将到期', value: `${upcomingCount} 个`, hint: '重点关注本周截止项目' },
+		];
+	}
 	if (currentRole.value === ROLE_ENUM.ADMIN) {
 		return [
 			{ key: 'total', label: '全部项目', value: `${filteredProjects.value.length} 个`, hint: `当前筛选结果覆盖 ${filteredProjects.value.length} 个项目` },
@@ -2806,8 +2473,6 @@ watch(currentRole, (nextRole) => {
 	if (!visibleSections.value.some((item) => item.key === activeSection.value)) {
 		activeSection.value = visibleSections.value[0]?.key || 'overview';
 	}
-	employeeFilters.department = currentRole.value === ROLE_ENUM.MANAGER ? currentUser.value.department : '';
-	employeeTablePage.value = 1;
 	projectFilters.department = currentRole.value === ROLE_ENUM.MANAGER ? currentUser.value.department : '';
 	projectTablePage.value = 1;
 	reportFilters.department = currentRole.value === ROLE_ENUM.MANAGER ? currentUser.value.department : '';
@@ -2826,21 +2491,40 @@ watch(currentRole, (nextRole) => {
 });
 
 watch(
-	() => [employeeFilters.keyword, employeeFilters.department, employeeFilters.status, currentRole.value].join('|'),
-	() => {
-		employeeTablePage.value = 1;
-	}
-);
-watch(
 	() => [projectFilters.keyword, projectFilters.department, projectFilters.status, projectFilters.priority, projectFilters.progress, currentRole.value].join('|'),
 	() => {
 		projectTablePage.value = 1;
 	}
 );
 watch(
+	() => [activeSection.value, projectTablePage.value, projectTablePageSize.value, projectFilters.keyword, projectFilters.department, projectFilters.status, projectFilters.priority, projectFilters.progress, currentRole.value].join('|'),
+	() => {
+		if (activeSection.value === 'projects') {
+			loadProjects();
+		}
+	}
+);
+watch(
 	() => [reportFilters.keyword, reportFilters.department, reportFilters.status, JSON.stringify(reportFilters.dateRange || []), currentRole.value].join('|'),
 	() => {
 		reportTablePage.value = 1;
+	}
+);
+watch(
+	() => [activeSection.value, reportTablePage.value, reportTablePageSize.value, reportFilters.keyword, reportFilters.department, reportFilters.status, JSON.stringify(reportFilters.dateRange || []), currentRole.value].join('|'),
+	() => {
+		if (activeSection.value === 'reports') {
+			loadReports();
+		}
+	}
+);
+watch(
+	() => activeReportId.value,
+	async (nextId) => {
+		if (nextId) {
+			const detail = await loadReportDetail(nextId);
+			await preloadReportRelatedProjects(detail || currentReportDetail.value);
+		}
 	}
 );
 watch(
@@ -2851,31 +2535,13 @@ watch(
 );
 
 watch(
-	() => [employeeForm.name, employeeDialogMode.value].join('|'),
-	() => {
-		if (employeeDialogMode.value !== 'create') return;
-		if (!employeeForm.name.trim()) {
-			if (!employeeUserNameTouched.value) {
-				employeeForm.userName = '';
-			}
-			return;
-		}
-		if (!employeeUserNameTouched.value || !employeeForm.userName) {
-			employeeForm.userName = buildEmployeeDefaultUserName(employeeForm.name);
-		}
-		if (!employeeForm.password) {
-			employeeForm.password = 'Qaz!123';
-		}
-	}
-);
-watch(
 	() => JSON.stringify({
 		visible: reportFormVisible.value,
 		canWrite: canWriteReport.value,
 		userId: currentUser.value.id,
 		date: reportForm.date,
 		title: reportForm.title,
-		relatedProjectId: reportForm.relatedProjectId,
+		relatedProjectIds: reportForm.relatedProjectIds,
 		workContent: reportForm.workContent,
 		tomorrowPlan: reportForm.tomorrowPlan,
 		problems: reportForm.problems,
@@ -2898,8 +2564,40 @@ watch(
 	() => {
 		syncSettingsAvatarState(currentUser.value.id);
 		resetSettingsForm();
+		if (activeSection.value === 'overview') {
+			loadOverviewRealtimeStats();
+		}
 	},
 	{ immediate: true }
+);
+
+// 监听切换到项目管理页时加载项目数据
+watch(
+	() => activeSection.value,
+	(nextSection) => {
+	if (nextSection === 'projects') {
+		loadDepartments();
+		loadEmployees();
+	} else if (nextSection === 'reports') {
+		loadReports();
+		if (canWriteReport.value) {
+			loadReportProjectOptions();
+		}
+	} else if (nextSection === 'overview') {
+		loadOverviewData({ range: overviewRange.value, trendMode: projectTrendMode.value });
+		loadOverviewRealtimeStats();
+	}
+}
+);
+
+// 监听首页概览参数变化时重新加载数据
+watch(
+	[() => overviewRange.value, () => projectTrendMode.value],
+	() => {
+		if (activeSection.value === 'overview' && !sectionLoading.value) {
+			loadOverviewData({ range: overviewRange.value, trendMode: projectTrendMode.value });
+		}
+	}
 );
 
 watch(
@@ -2915,6 +2613,7 @@ watch(
 		scopedReports,
 		departmentEmployeeStats,
 		personalReportStats,
+		() => JSON.stringify(apiData.overview || {}),
 	],
 	() => {
 		scheduleChartsRender();
@@ -2927,8 +2626,10 @@ onMounted(() => {
 	fetchCurrentUserApi();
 	// 初始化API数据（字典、部门等基础数据）
 	initializeApiData();
+	// 加载管理中心概览数据
+	loadOverviewData({ range: overviewRange.value, trendMode: projectTrendMode.value });
+	loadOverviewRealtimeStats();
 	if (currentRole.value === ROLE_ENUM.MANAGER) {
-		employeeFilters.department = currentUser.value.department;
 		projectFilters.department = currentUser.value.department;
 		reportFilters.department = currentUser.value.department;
 	}
@@ -2963,10 +2664,8 @@ function triggerSectionLoading(duration = 180) {
 	}, duration);
 }
 
-function resetEmployeeFilters() {
-	employeeFilters.keyword = '';
-	employeeFilters.status = '';
-	employeeFilters.department = currentRole.value === ROLE_ENUM.MANAGER ? currentUser.value.department : '';
+function handleApiDataUpdate(newApiData) {
+	Object.assign(apiData, newApiData);
 }
 
 function resetSettingsForm() {
@@ -2977,213 +2676,6 @@ function resetSettingsForm() {
 	nextTick(() => {
 		settingsFormRef.value?.clearValidate();
 	});
-}
-
-function openDepartmentDialog() {
-	departmentForm.name = '';
-	departmentDialogVisible.value = true;
-	nextTick(() => {
-		departmentFormRef.value?.clearValidate();
-	});
-}
-
-function openCreateEmployeeDialog() {
-	employeeDialogMode.value = 'create';
-	resetEmployeeForm();
-	// 部门主管新增员工时，角色强制为员工
-	if (currentRole.value === ROLE_ENUM.MANAGER) {
-		employeeForm.role = 'employee';
-		employeeForm.roleName = '员工';
-	}
-	employeeDialogVisible.value = true;
-}
-
-function openEditEmployeeDialog(employee) {
-	employeeDialogMode.value = 'edit';
-	resetEmployeeForm();
-	Object.assign(employeeForm, {
-		id: employee.id,
-		name: employee.name,
-		userName: employee.userName,
-		phone: employee.phone,
-		email: employee.email,
-		department: employee.department,
-		position: employee.position,
-		password: '',
-		status: employee.status,
-		role: employee.role,
-		roleName: employee.roleName,
-	});
-	employeeDialogVisible.value = true;
-}
-
-async function submitEmployeeForm() {
-	if (!employeeFormRef.value) return;
-	await employeeFormRef.value.validate();
-
-	if (employeeDialogMode.value === 'create') {
-		// 获取部门ID
-		let departmentId = '';
-		if (currentRole.value === ROLE_ENUM.MANAGER) {
-			const dept = apiData.departments.find(d => d.name === currentUser.value.department);
-			departmentId = dept?.id || '';
-		} else {
-			const dept = apiData.departments.find(d => d.name === employeeForm.department);
-			departmentId = dept?.id || '';
-		}
-
-		const payload = {
-			name: employeeForm.name.trim(),
-			userName: employeeForm.userName.trim(),
-			password: employeeForm.password || 'Qaz!123',
-			phone: employeeForm.phone.trim(),
-			email: employeeForm.email.trim(),
-			departmentId,
-			position: employeeForm.position.trim(),
-			status: employeeForm.status,
-			role: employeeForm.role,
-			roleName: employeeForm.roleName,
-		};
-
-		try {
-			const res = await createEmployee(payload);
-			if (res && res.code === 0 && res.data) {
-				const newEmployee = {
-					id: safeGet(res.data.id),
-					userName: safeGet(res.data.userName, employeeForm.userName.trim()),
-					name: safeGet(res.data.name, employeeForm.name.trim()),
-					role: safeGet(res.data.role, ROLE_ENUM.EMPLOYEE),
-					roleName: safeGet(res.data.roleName),
-					departmentId: safeGet(res.data.departmentId),
-					department: safeGet(res.data.department, currentRole.value === ROLE_ENUM.MANAGER ? currentUser.value.department : employeeForm.department),
-					position: safeGet(res.data.position, employeeForm.position.trim()),
-					phone: safeGet(res.data.phone, employeeForm.phone.trim()),
-					email: safeGet(res.data.email, employeeForm.email.trim()),
-					status: safeGet(res.data.status, employeeForm.status),
-					createdAt: safeGet(res.data.createdAt, `${DASHBOARD_TODAY} 10:00`),
-				};
-				employees.unshift(newEmployee);
-				if (apiData.employees.length > 0) {
-					apiData.employees.unshift(newEmployee);
-				}
-				ElMessage.success('员工新增成功');
-			} else {
-				ElMessage.error(res?.message || '员工新增失败');
-			}
-		} catch (err) {
-			ElMessage.error(err?.message || '员工新增失败');
-		}
-	} else {
-		// 编辑员工
-		let departmentId = '';
-		if (currentRole.value === ROLE_ENUM.MANAGER) {
-			const dept = apiData.departments.find(d => d.name === currentUser.value.department);
-			departmentId = dept?.id || '';
-		} else {
-			const dept = apiData.departments.find(d => d.name === employeeForm.department);
-			departmentId = dept?.id || '';
-		}
-
-		const payload = {
-			name: employeeForm.name.trim(),
-			phone: employeeForm.phone.trim(),
-			email: employeeForm.email.trim(),
-			departmentId,
-			position: employeeForm.position.trim(),
-			status: employeeForm.status,
-			role: employeeForm.role,
-			roleName: employeeForm.roleName,
-		};
-
-		try {
-			const res = await updateEmployee(employeeForm.id, payload);
-			if (res && res.code === 0 && res.data) {
-				const target = employees.find((item) => item.id === employeeForm.id);
-				if (target) {
-					Object.assign(target, {
-						name: safeGet(res.data.name, employeeForm.name.trim()),
-						phone: safeGet(res.data.phone, employeeForm.phone.trim()),
-						email: safeGet(res.data.email, employeeForm.email.trim()),
-						department: safeGet(res.data.department, currentRole.value === ROLE_ENUM.MANAGER ? currentUser.value.department : employeeForm.department),
-						position: safeGet(res.data.position, employeeForm.position.trim()),
-						status: safeGet(res.data.status, employeeForm.status),
-						role: safeGet(res.data.role, employeeForm.role),
-						roleName: safeGet(res.data.roleName, employeeForm.roleName),
-					});
-				}
-				ElMessage.success('员工信息已更新');
-			} else {
-				// 降级到本地更新
-				const target = employees.find((item) => item.id === employeeForm.id);
-				if (target) {
-					Object.assign(target, {
-						name: employeeForm.name.trim(),
-						phone: employeeForm.phone.trim(),
-						email: employeeForm.email.trim(),
-						department: currentRole.value === ROLE_ENUM.MANAGER ? currentUser.value.department : employeeForm.department,
-						position: employeeForm.position.trim(),
-						status: employeeForm.status,
-						role: employeeForm.role,
-						roleName: employeeForm.roleName,
-					});
-				}
-				ElMessage.success('员工信息已更新（本地）');
-			}
-		} catch {
-			// 降级到本地更新
-			const target = employees.find((item) => item.id === employeeForm.id);
-			if (target) {
-				Object.assign(target, {
-					name: employeeForm.name.trim(),
-					phone: employeeForm.phone.trim(),
-					email: employeeForm.email.trim(),
-					department: currentRole.value === ROLE_ENUM.MANAGER ? currentUser.value.department : employeeForm.department,
-					position: employeeForm.position.trim(),
-					status: employeeForm.status,
-				});
-			}
-			ElMessage.success('员工信息已更新（本地）');
-		}
-	}
-	employeeDialogVisible.value = false;
-	resetEmployeeForm();
-}
-
-async function submitDepartmentForm() {
-	if (!departmentFormRef.value) return;
-	await departmentFormRef.value.validate();
-	const nextDepartmentName = departmentForm.name.trim();
-	if (!nextDepartmentName) return;
-
-	const payload = {
-		name: nextDepartmentName,
-	};
-
-	try {
-		const res = await createDepartment(payload);
-		if (res && res.code === 0 && res.data) {
-			const newDept = {
-				id: safeGet(res.data.id),
-				name: safeGet(res.data.name, nextDepartmentName),
-				employeeCount: Number(res.data.employeeCount) || 0,
-				managerId: safeGet(res.data.managerId),
-				managerName: safeGet(res.data.managerName),
-			};
-			apiData.departments.push(newDept);
-			departments.push(newDept.name);
-		} else {
-			departments.push(nextDepartmentName);
-		}
-	} catch {
-		departments.push(nextDepartmentName);
-	}
-
-	if (!employeeForm.department) {
-		employeeForm.department = nextDepartmentName;
-	}
-	departmentDialogVisible.value = false;
-	departmentForm.name = '';
-	ElMessage.success('部门新增成功');
 }
 
 async function submitSettingsForm() {
@@ -3222,6 +2714,7 @@ async function submitSettingsForm() {
 }
 
 async function handleSettingsAvatarChange(uploadFile) {
+	console.log(uploadFile)
 	const rawFile = uploadFile?.raw || uploadFile;
 	if (!rawFile) return;
 	const isAllowedType = /^image\/(jpeg|png|gif)$/.test(String(rawFile.type || ''));
@@ -3234,21 +2727,18 @@ async function handleSettingsAvatarChange(uploadFile) {
 		return;
 	}
 	try {
-		const formData = new FormData();
-		formData.append('file', rawFile);
-		const res = await apiUploadAvatar(formData);
-		if (res && res.code === 0 && res.data?.avatarUrl) {
-			currentUserApiData.value.avatarUrl = res.data.avatarUrl;
-			writePersistedSettingsAvatar(currentUser.value.id, res.data.avatarUrl);
+		const res = await apiUploadAvatar(rawFile, currentUser.value.id);
+		if (res && res.code === 0 && res.data?.files?.[0]?.url) {
+			const avatarUrl = res.data.files[0].url;
+			currentUserApiData.value.avatarUrl = avatarUrl;
+			writePersistedSettingsAvatar(currentUser.value.id, avatarUrl);
 			ElMessage.success('头像已更新');
 		} else {
-			// 降级到本地预览
 			const dataUrl = await readFileAsDataUrl(rawFile);
 			writePersistedSettingsAvatar(currentUser.value.id, dataUrl);
 			ElMessage.success('头像已更新（本地预览）');
 		}
 	} catch {
-		// 降级到本地预览
 		try {
 			const dataUrl = await readFileAsDataUrl(rawFile);
 			writePersistedSettingsAvatar(currentUser.value.id, dataUrl);
@@ -3272,89 +2762,10 @@ async function resetSettingsAvatar() {
 	ElMessage.success('已恢复默认头像');
 }
 
-async function removeEmployee(employee) {
-	if (isProtectedEmployee(employee)) return;
-
-	try {
-		await deleteEmployee(employee.id);
-	} catch {
-		// API失败时继续执行本地删除
+function handleProjectFilterUpdate(key, value) {
+	if (key in projectFilters) {
+		projectFilters[key] = value;
 	}
-
-	const index = employees.findIndex((item) => item.id === employee.id);
-	if (index >= 0) {
-		employees.splice(index, 1);
-		// 同时从API数据中删除
-		const apiIndex = apiData.employees.findIndex((item) => item.id === employee.id);
-		if (apiIndex >= 0) {
-			apiData.employees.splice(apiIndex, 1);
-		}
-		ElMessage.success('员工已删除');
-		if ((employeeTablePage.value - 1) * employeeTablePageSize.value >= filteredEmployees.value.length && employeeTablePage.value > 1) {
-			employeeTablePage.value -= 1;
-		}
-	}
-}
-
-function isProtectedEmployee(employee) {
-	return Object.values(roleTestUserMap).includes(employee.userName) || employee.role !== ROLE_ENUM.EMPLOYEE;
-}
-
-function resetEmployeeForm() {
-	employeeUserNameTouched.value = false;
-	Object.assign(employeeForm, {
-		id: '',
-		name: '',
-		userName: '',
-		phone: '',
-		email: '',
-		department: currentRole.value === ROLE_ENUM.MANAGER ? currentUser.value.department : '',
-		position: '',
-		password: 'Qaz!123',
-		status: '在职',
-		role: 'employee',
-		roleName: '员工',
-	});
-	nextTick(() => {
-		employeeFormRef.value?.clearValidate();
-	});
-}
-
-function createEmployeeId() {
-	const maxId = employees.reduce((max, item) => {
-		const numeric = Number(String(item.id).replace('emp-', ''));
-		return Number.isFinite(numeric) ? Math.max(max, numeric) : max;
-	}, 0);
-	return `emp-${String(maxId + 1).padStart(3, '0')}`;
-}
-
-function createEmployeeUserName(name) {
-	const base = String(name || 'staff').trim().toLowerCase() || 'staff';
-	return `${base.replace(/\s+/g, '')}.${Date.now().toString().slice(-4)}`;
-}
-
-function handleEmployeeUserNameInput() {
-	employeeUserNameTouched.value = true;
-	employeeForm.userName = String(employeeForm.userName || '').replace(/\s+/g, '').toLowerCase();
-}
-
-function handleRoleChange(value) {
-	const selected = employeeRoleOptions.find(item => item.value === value);
-	employeeForm.roleName = selected ? selected.label : '';
-}
-
-function buildEmployeeDefaultUserName(name) {
-	const normalized = String(name || '').trim();
-	if (!normalized) return '';
-	const transliterated = pinyin(normalized, {
-		toneType: 'none',
-		type: 'array',
-		nonZh: 'consecutive',
-	})
-		.join('')
-		.replace(/[^a-z0-9._-]/gi, '')
-		.toLowerCase();
-	return transliterated || createEmployeeUserName(normalized);
 }
 
 function resetProjectFilters() {
@@ -3373,8 +2784,17 @@ function resetReportFilters() {
 }
 
 function openProjectDetail(project) {
+	if (!project?.id) return;
 	activeProjectId.value = project.id;
 	projectDetailVisible.value = true;
+	refreshProjectDetail(project.id);
+}
+
+function openReportRelatedProject(projectLink) {
+	const projectId = String(projectLink?.id || '').trim();
+	if (!projectId) return;
+	const project = projectLink?.project || findProjectById(projectId) || { id: projectId, projectName: projectLink?.name || projectId };
+	openProjectDetail(project);
 }
 
 function openReportDetail(report) {
@@ -3393,7 +2813,13 @@ function openProjectFromOverview(project) {
 }
 
 function openCreateProjectDialog() {
-	resetProjectForm();
+	if (!projectForm.department) {
+		projectForm.department = currentRole.value === ROLE_ENUM.MANAGER ? currentUser.value.department : '';
+	}
+	// 确保员工数据已加载
+	if (!apiDataLoaded.employees) {
+		loadEmployees();
+	}
 	projectFormVisible.value = true;
 }
 
@@ -3408,10 +2834,11 @@ function openReportEditor() {
 	reportFormVisible.value = true;
 }
 
-function openProjectProgressDialog(project) {
+async function openProjectProgressDialog(project) {
 	if (!canSubmitProjectProgress(project)) return;
 	activeProjectId.value = project.id;
-	resetProjectProgressForm(project);
+	const detail = await refreshProjectDetail(project.id);
+	resetProjectProgressForm(detail || project);
 	projectProgressVisible.value = true;
 }
 
@@ -3423,11 +2850,58 @@ function openReportCommentDialog(report) {
 	reportCommentVisible.value = true;
 }
 
+function removeReportFromState(report) {
+	if (!report?.id) return;
+	const reportId = String(report.id);
+	const matchesReport = (item) => String(item?.id || '') === reportId;
+	const wasTodayReport = getReportSubmitDate(report) === REPORT_RUNTIME_TODAY && isReportOwnedByCurrentUser(report);
+	const wasListed = apiData.reports.some(matchesReport) || reportListState.items.some(matchesReport);
+
+	apiData.reports = apiData.reports.filter((item) => !matchesReport(item));
+	reportListState.items = reportListState.items.filter((item) => !matchesReport(item));
+
+	if (wasListed && reportListState.total > 0) {
+		reportListState.total = Math.max(0, Number(reportListState.total || 0) - 1);
+	}
+	if (wasTodayReport || matchesReport(reportListState.todayReport)) {
+		reportListState.todayReport = null;
+		reportListState.canWriteToday = true;
+	}
+	if (matchesReport(currentReportDetail.value)) {
+		activeReportId.value = '';
+		reportDetailVisible.value = false;
+		reportCommentVisible.value = false;
+	}
+}
+
+async function removeReport(report) {
+	if (!canDeleteReport(report)) return;
+	try {
+		await deleteReport(report.id);
+		removeReportFromState(report);
+		clearPersistedReportDraft(currentUser.value.id, REPORT_RUNTIME_TODAY);
+		await loadReports({ pageIndex: reportTablePage.value });
+		ElMessage.success('今日日报已删除，可以重新填写');
+	} catch (err) {
+		handleApiError(err, '日报删除失败');
+	}
+}
+
 async function fetchCurrentUserApi() {
 	try {
 		const res = await getCurrentUser();
 		if (res && res.code === 0 && res.data) {
+			console.log(res.data)
 			currentUserApiData.value = res.data;
+			// 自动同步真实用户权限到模拟角色
+			const realUserRole = res.data.role;
+			if (realUserRole && Object.values(ROLE_ENUM).includes(realUserRole)) {
+				// 仅在从未手动切换过角色时自动同步（通过 localStorage 判断）
+				const hasManualSwitch = localStorage.getItem(ROLE_STORAGE_KEY);
+				if (!hasManualSwitch) {
+					currentRole.value = realUserRole;
+				}
+			}
 		}
 	} catch {
 		// 接口失败时静默降级，currentUser computed 会自动返回模拟数据
@@ -3491,6 +2965,7 @@ async function loadDepartments() {
  * 加载员工列表
  */
 async function loadEmployees(params = {}) {
+	apiDataLoading.employees = true;
 	try {
 		const res = await getEmployees(params);
 		if (res && res.code === 0 && res.data) {
@@ -3515,6 +2990,9 @@ async function loadEmployees(params = {}) {
 		}
 	} catch {
 		// 静默失败
+	} finally {
+		apiDataLoaded.employees = true;
+		apiDataLoading.employees = false;
 	}
 }
 
@@ -3522,8 +3000,26 @@ async function loadEmployees(params = {}) {
  * 加载项目列表
  */
 async function loadProjects(params = {}) {
+	apiDataLoading.projects = true;
 	try {
-		const res = await getProjects(params);
+		const query = {
+			keyword: projectFilters.keyword || undefined,
+			status: projectFilters.status || undefined,
+			priority: projectFilters.priority || undefined,
+			progressMin: projectFilters.progress || undefined,
+			pageIndex: projectTablePage.value,
+			pageSize: projectTablePageSize.value,
+			...params,
+		};
+		if (currentRole.value === ROLE_ENUM.MANAGER) {
+			const currentDepartmentId = currentUser.value.departmentId
+				|| apiData.departments.find((item) => item.name === currentUser.value.department)?.id;
+			query.departmentId = currentDepartmentId || query.departmentId;
+		} else if (projectFilters.department) {
+			const matchedDepartment = apiData.departments.find((item) => item.name === projectFilters.department);
+			query.departmentId = matchedDepartment?.id || query.departmentId;
+		}
+		const res = await getProjects(query);
 		if (res && res.code === 0 && res.data) {
 			const items = safeArray(res.data.items || res.data);
 			apiData.projects = items.map(item => ({
@@ -3537,26 +3033,39 @@ async function loadProjects(params = {}) {
 				leader: safeGet(item.leader),
 				executorId: safeGet(item.executorId),
 				executor: safeGet(item.executor),
-				createdAt: safeGet(item.createdAt),
+				createdAt: normalizeApiDateLike(item.createdAt),
 				progress: Number(item.progress) || 0,
 				currentStageKey: safeGet(item.currentStageKey),
 				currentStage: safeGet(item.currentStage),
 				status: safeGet(item.status, '进行中'),
-				deadline: safeGet(item.deadline),
+				deadline: normalizeApiDateLike(item.deadline),
 				daysLeft: Number(item.daysLeft) || 0,
 				attachments: Number(item.attachments) || 0,
 				priority: safeGet(item.priority, '中'),
 				projectDesc: safeGet(item.projectDesc),
 				canViewDetail: Boolean(item.canViewDetail),
-				canSubmitProgress: Boolean(item.canSubmitProgress),
+				canSubmitProgress: normalizeOptionalBoolean(item.canSubmitProgress),
 				canAudit: Boolean(item.canAudit),
 				progressHistory: [],
 				progressSubmissions: [],
 				attachmentList: [],
 			}));
+			projectListState.items = apiData.projects;
+			projectListState.total = Number(res.data.total) || items.length;
+			projectListState.pageIndex = Number(res.data.pageIndex) || query.pageIndex || 1;
+			projectListState.pageSize = Number(res.data.pageSize) || query.pageSize || projectTablePageSize.value;
+			projectListState.metrics = res.data.metrics || null;
+		} else {
+			apiData.projects = [];
+			projectListState.items = [];
+			projectListState.total = 0;
+			projectListState.metrics = null;
 		}
-	} catch {
-		// 静默失败
+	} catch (err) {
+		handleApiError(err, '项目列表加载失败');
+	} finally {
+		apiDataLoaded.projects = true;
+		apiDataLoading.projects = false;
 	}
 }
 
@@ -3564,8 +3073,27 @@ async function loadProjects(params = {}) {
  * 加载日报列表
  */
 async function loadReports(params = {}) {
+	apiDataLoading.reports = true;
 	try {
-		const res = await getReports(params);
+		const query = {
+			keyword: reportFilters.keyword || undefined,
+			status: reportFilters.status || undefined,
+			pageIndex: reportTablePage.value,
+			pageSize: reportTablePageSize.value,
+			...params,
+		};
+		const [startDate, endDate] = Array.isArray(reportFilters.dateRange) ? reportFilters.dateRange : [];
+		if (startDate) query.startDate = startDate;
+		if (endDate) query.endDate = endDate;
+		if (currentRole.value === ROLE_ENUM.MANAGER) {
+			const currentDepartmentId = currentUser.value.departmentId
+				|| apiData.departments.find((item) => item.name === currentUser.value.department)?.id;
+			query.DepartmentId = currentDepartmentId || query.departmentId;
+		} else if (reportFilters.department) {
+			const matchedDepartment = apiData.departments.find((item) => item.name === reportFilters.department);
+			query.DepartmentId = matchedDepartment?.id || query.departmentId;
+		}
+		const res = await getReports(query);
 		if (res && res.code === 0 && res.data) {
 			const items = safeArray(res.data.items || res.data);
 			apiData.reports = items.map(item => ({
@@ -3575,9 +3103,10 @@ async function loadReports(params = {}) {
 				employeeName: safeGet(item.employeeName),
 				departmentId: safeGet(item.departmentId),
 				department: safeGet(item.department),
-				submitDate: safeGet(item.submitDate),
-				submitTime: safeGet(item.submitTime),
+				submitDate: normalizeApiDateLike(item.submitDate),
+				submitTime: normalizeApiDateLike(item.submitTime, { withTime: true }),
 				relatedProjectId: safeGet(item.relatedProjectId),
+				relatedProjectIds: normalizeReportRelatedProjectIds(item),
 				relatedProject: safeGet(item.relatedProject),
 				content: safeGet(item.content),
 				workContent: safeGet(item.workContent),
@@ -3586,15 +3115,60 @@ async function loadReports(params = {}) {
 				status: safeGet(item.status, '已提交'),
 				leaderComment: safeGet(item.leaderComment),
 				commentAuthor: safeGet(item.commentAuthor),
-				commentTime: safeGet(item.commentTime),
+				commentTime: normalizeApiDateLike(item.commentTime, { withTime: true }),
 				score: safeGet(item.score),
 				canViewDetail: Boolean(item.canViewDetail),
 				canComment: Boolean(item.canComment),
-				attachmentList: [],
+				attachmentList: safeArray(item.attachments).map((attachment, index) => normalizeReportAttachment(attachment, `${safeGet(item.id)}-${index}`)),
 			}));
+			reportListState.items = apiData.reports;
+			reportListState.total = Number(res.data.total) || items.length;
+			reportListState.pageIndex = Number(res.data.pageIndex) || query.pageIndex || 1;
+			reportListState.pageSize = Number(res.data.pageSize) || query.pageSize || reportTablePageSize.value;
+			reportListState.totalPages = Number(res.data.totalPages) || 0;
+			reportListState.metrics = res.data.metrics || null;
+			reportListState.todayReport = res.data.todayReport
+				? {
+					id: safeGet(res.data.todayReport.id),
+					title: safeGet(res.data.todayReport.title),
+					employeeId: safeGet(res.data.todayReport.employeeId),
+					employeeName: safeGet(res.data.todayReport.employeeName),
+					departmentId: safeGet(res.data.todayReport.departmentId),
+					department: safeGet(res.data.todayReport.department),
+					submitDate: normalizeApiDateLike(res.data.todayReport.submitDate),
+					submitTime: normalizeApiDateLike(res.data.todayReport.submitTime, { withTime: true }),
+					relatedProjectId: safeGet(res.data.todayReport.relatedProjectId),
+					relatedProjectIds: normalizeReportRelatedProjectIds(res.data.todayReport),
+					relatedProject: safeGet(res.data.todayReport.relatedProject),
+					content: safeGet(res.data.todayReport.content),
+					workContent: safeGet(res.data.todayReport.workContent),
+					tomorrowPlan: safeGet(res.data.todayReport.tomorrowPlan),
+					problems: safeGet(res.data.todayReport.problems),
+					status: safeGet(res.data.todayReport.status, '已提交'),
+					leaderComment: safeGet(res.data.todayReport.leaderComment),
+					commentAuthor: safeGet(res.data.todayReport.commentAuthor),
+					commentTime: normalizeApiDateLike(res.data.todayReport.commentTime, { withTime: true }),
+					score: safeGet(res.data.todayReport.score),
+					canViewDetail: Boolean(res.data.todayReport.canViewDetail),
+					canComment: Boolean(res.data.todayReport.canComment),
+					attachmentList: safeArray(res.data.todayReport.attachments).map((attachment, index) => normalizeReportAttachment(attachment, `today-${index}`)),
+				}
+				: null;
+			reportListState.canWriteToday = res.data.canWriteToday;
+		} else {
+			apiData.reports = [];
+			reportListState.items = [];
+			reportListState.total = 0;
+			reportListState.totalPages = 0;
+			reportListState.metrics = null;
+			reportListState.todayReport = null;
+			reportListState.canWriteToday = null;
 		}
-	} catch {
-		// 静默失败
+	} catch (err) {
+		handleApiError(err, '日报列表加载失败');
+	} finally {
+		apiDataLoaded.reports = true;
+		apiDataLoading.reports = false;
 	}
 }
 
@@ -3612,6 +3186,36 @@ async function loadOverviewData(params = {}) {
 	}
 }
 
+async function loadOverviewRealtimeStats() {
+	try {
+		await loadEmployees();
+		const query = {
+			startDate: REPORT_RUNTIME_TODAY,
+			endDate: REPORT_RUNTIME_TODAY,
+			pageIndex: 1,
+			pageSize: 1,
+		};
+		if (currentRole.value === ROLE_ENUM.MANAGER) {
+			const currentDepartmentId = currentUser.value.departmentId
+				|| apiData.departments.find((item) => item.name === currentUser.value.department)?.id;
+			query.DepartmentId = currentDepartmentId || query.departmentId;
+		}
+		const res = await getReports(query);
+		if (res && res.code === 0 && res.data) {
+			const total = Number(res.data.total);
+			overviewRealtimeStats.todaySubmitted = Number.isFinite(total)
+				? total
+				: safeArray(res.data.items || res.data).length;
+			overviewRealtimeStats.expectedCount = scopedEmployees.value.length;
+			return;
+		}
+	} catch {
+		// 静默失败
+	}
+	overviewRealtimeStats.todaySubmitted = null;
+	overviewRealtimeStats.expectedCount = scopedEmployees.value.length || null;
+}
+
 /**
  * 加载项目详情
  */
@@ -3620,6 +3224,36 @@ async function loadProjectDetail(projectId) {
 		const res = await getProject(projectId);
 		if (res && res.code === 0 && res.data) {
 			const item = res.data;
+			const issuedAttachments = safeArray(item.attachments).map((attachment, index) => ({
+				id: safeGet(attachment?.fileId || attachment?.id || attachment?.attachmentId),
+				fileName: safeGet(attachment?.fileName || attachment?.name),
+				url: resolveAttachmentUrl(
+					safeGet(attachment?.url),
+					safeGet(attachment?.fileId || attachment?.id || attachment?.attachmentId),
+				),
+				key: safeGet(attachment?.id || attachment?.fileId || attachment?.attachmentId, `${projectId}-issued-${index}`),
+			})).filter((attachment) => Boolean(attachment.fileName));
+			const timeline = safeArray(item.timeline).map((entry, index) => ({
+				key: safeGet(entry.id, `${projectId}-timeline-${index}`),
+				type: safeGet(entry.type, 'progress'),
+				typeLabel: safeGet(entry.typeLabel || entry.title, '动态'),
+				color: safeGet(entry.color, '#0ea5e9'),
+				title: safeGet(entry.title, '项目动态'),
+				date: withTimelineTime(safeGet(entry.time), '18:00'),
+				content: safeGet(entry.content, ''),
+				attachments: safeArray(entry.attachments).map((attachment, attachmentIndex) => ({
+					id: safeGet(attachment?.fileId || attachment?.id || attachment?.attachmentId, `${projectId}-timeline-${index}-${attachmentIndex}`),
+					fileName: safeGet(attachment?.fileName || attachment?.name),
+					url: resolveAttachmentUrl(
+						safeGet(attachment?.url),
+						safeGet(attachment?.fileId || attachment?.id || attachment?.attachmentId),
+					),
+				})).filter((attachment) => Boolean(attachment.fileName)),
+			}));
+			const timelineAttachmentList = timeline
+				.flatMap((entry) => safeArray(entry.attachments))
+				.filter(Boolean);
+			const detailAttachments = [...issuedAttachments, ...timelineAttachmentList].filter(Boolean);
 			const detail = {
 				id: safeGet(item.id),
 				projectName: safeGet(item.projectName),
@@ -3631,49 +3265,31 @@ async function loadProjectDetail(projectId) {
 				leader: safeGet(item.leader),
 				executorId: safeGet(item.executorId),
 				executor: safeGet(item.executor),
-				createdAt: safeGet(item.createdAt),
-				deadline: safeGet(item.deadline),
+				createdAt: normalizeApiDateLike(item.createdAt),
+				deadline: normalizeApiDateLike(item.deadline),
 				priority: safeGet(item.priority, '中'),
 				progress: Number(item.progress) || 0,
 				currentStageKey: safeGet(item.currentStageKey),
 				currentStage: safeGet(item.currentStage),
 				status: safeGet(item.status, '进行中'),
 				projectDesc: safeGet(item.projectDesc),
-				attachments: safeArray(item.attachments).map(a => ({
-					id: safeGet(a.id),
-					fileName: safeGet(a.fileName),
-					fileExt: safeGet(a.fileExt),
-					url: safeGet(a.url),
-				})),
-				timeline: safeArray(item.timeline).map(t => ({
-					id: safeGet(t.id),
-					type: safeGet(t.type),
-					title: safeGet(t.title),
-					content: safeGet(t.content),
-					operator: safeGet(t.operator),
-					time: safeGet(t.time),
-					stageKey: safeGet(t.stageKey),
-					stageLabel: safeGet(t.stageLabel),
-					progress: Number(t.progress) || 0,
-					attachments: safeArray(t.attachments).map(a => ({
-						id: safeGet(a.id),
-						fileName: safeGet(a.fileName),
-						url: safeGet(a.url),
-					})),
-				})),
+				attachments: detailAttachments.length,
+				timeline,
 				reportHistory: safeArray(item.reportHistory).map(r => ({
 					id: safeGet(r.id),
 					title: safeGet(r.title),
 					employeeName: safeGet(r.employeeName),
-					submitDate: safeGet(r.submitDate),
+					submitDate: normalizeApiDateLike(r.submitDate),
 					status: safeGet(r.status),
 					content: safeGet(r.content),
 				})),
-				canSubmitProgress: Boolean(item.canSubmitProgress),
+				availableProgressStages: safeArray(item.availableProgressStages).map((stage) => normalizeProjectStage(stage)).filter(Boolean),
+				canSubmitProgress: normalizeOptionalBoolean(item.canSubmitProgress),
 				canAudit: Boolean(item.canAudit),
-				attachmentList: [],
+				attachmentList: detailAttachments,
 				progressHistory: [],
 				progressSubmissions: [],
+				auditLogs: [],
 			};
 			return detail;
 		}
@@ -3681,6 +3297,47 @@ async function loadProjectDetail(projectId) {
 		// 静默失败
 	}
 	return null;
+}
+
+async function refreshProjectDetail(projectId) {
+	if (!projectId) return null;
+	const detail = await loadProjectDetail(projectId);
+	if (!detail) return null;
+	const targetIndex = apiData.projects.findIndex((item) => item.id === detail.id);
+	if (targetIndex >= 0) {
+		apiData.projects[targetIndex] = {
+			...apiData.projects[targetIndex],
+			...detail,
+		};
+		return apiData.projects[targetIndex];
+	}
+	apiData.projects.unshift(detail);
+	return detail;
+}
+
+async function ensureProjectLoadedById(projectId) {
+	const normalizedId = String(projectId || '').trim();
+	if (!normalizedId) return null;
+	const existing = findProjectById(normalizedId);
+	if (existing?.projectName && existing?.customerName) return existing;
+	const detail = await loadProjectDetail(normalizedId);
+	if (!detail) return existing;
+	const targetIndex = apiData.projects.findIndex((item) => String(item.id) === String(detail.id));
+	if (targetIndex >= 0) {
+		apiData.projects[targetIndex] = {
+			...apiData.projects[targetIndex],
+			...detail,
+		};
+		return apiData.projects[targetIndex];
+	}
+	apiData.projects.unshift(detail);
+	return detail;
+}
+
+async function preloadReportRelatedProjects(report) {
+	const projectIds = normalizeReportRelatedProjectIds(report);
+	if (!projectIds.length) return;
+	await Promise.all(projectIds.map((projectId) => ensureProjectLoadedById(projectId)));
 }
 
 /**
@@ -3691,16 +3348,17 @@ async function loadReportDetail(reportId) {
 		const res = await getReport(reportId);
 		if (res && res.code === 0 && res.data) {
 			const item = res.data;
-			return {
+			const detail = {
 				id: safeGet(item.id),
 				title: safeGet(item.title),
 				employeeId: safeGet(item.employeeId),
 				employeeName: safeGet(item.employeeName),
 				departmentId: safeGet(item.departmentId),
 				department: safeGet(item.department),
-				submitDate: safeGet(item.submitDate),
-				submitTime: safeGet(item.submitTime),
+				submitDate: normalizeApiDateLike(item.submitDate),
+				submitTime: normalizeApiDateLike(item.submitTime, { withTime: true }),
 				relatedProjectId: safeGet(item.relatedProjectId),
+				relatedProjectIds: normalizeReportRelatedProjectIds(item),
 				relatedProject: safeGet(item.relatedProject),
 				workContent: safeGet(item.workContent),
 				tomorrowPlan: safeGet(item.tomorrowPlan),
@@ -3709,16 +3367,21 @@ async function loadReportDetail(reportId) {
 				status: safeGet(item.status, '已提交'),
 				leaderComment: safeGet(item.leaderComment),
 				commentAuthor: safeGet(item.commentAuthor),
-				commentTime: safeGet(item.commentTime),
+				commentTime: normalizeApiDateLike(item.commentTime, { withTime: true }),
 				score: safeGet(item.score),
 				canComment: Boolean(item.canComment),
-				attachments: safeArray(item.attachments).map(a => ({
-					id: safeGet(a.id),
-					fileName: safeGet(a.fileName),
-					fileExt: safeGet(a.fileExt),
-					url: safeGet(a.url),
-				})),
+				attachmentList: safeArray(item.attachments).map((attachment, index) => normalizeReportAttachment(attachment, `${reportId}-${index}`)),
 			};
+			const targetIndex = apiData.reports.findIndex((report) => report.id === detail.id);
+			if (targetIndex >= 0) {
+				apiData.reports[targetIndex] = {
+					...apiData.reports[targetIndex],
+					...detail,
+				};
+				return apiData.reports[targetIndex];
+			}
+			apiData.reports.unshift(detail);
+			return detail;
 		}
 	} catch {
 		// 静默失败
@@ -3733,7 +3396,7 @@ async function loadReportProjectOptions() {
 	try {
 		const res = await getReportProjectOptions();
 		if (res && res.code === 0 && Array.isArray(res.data)) {
-			return res.data.map(item => ({
+			const options = res.data.map(item => ({
 				id: safeGet(item.id),
 				projectName: safeGet(item.projectName),
 				departmentId: safeGet(item.departmentId),
@@ -3742,6 +3405,8 @@ async function loadReportProjectOptions() {
 				executor: safeGet(item.executor),
 				status: safeGet(item.status),
 			}));
+			apiData.projects = mergeReportProjectOptions(apiData.projects, options);
+			return options;
 		}
 	} catch {
 		// 静默失败
@@ -3837,9 +3502,23 @@ function handleProjectDepartmentChange() {
 	}
 }
 
+function handleProjectExecutorChange(executorName) {
+	if (!executorName) return;
+	// 根据选择的执行人，自动设置对应的部门
+	const executorEmployee = projectExecutorEmployees.value.find(e => e.name === executorName);
+	if (executorEmployee && executorEmployee.department) {
+		// 如果当前选择的部门与执行人部门不一致，更新部门选择
+		if (projectForm.department !== executorEmployee.department) {
+			projectForm.department = executorEmployee.department;
+		}
+	}
+}
+
 async function submitProjectForm() {
-	if (!projectFormRef.value) return;
-	await projectFormRef.value.validate();
+	// 获取子组件暴露的表单 ref
+	const childFormRef = projectManagementRef.value?.projectFormRef;
+	if (!childFormRef) return;
+	await childFormRef.validate();
 
 	// 获取部门ID
 	let departmentId = '';
@@ -3851,21 +3530,60 @@ async function submitProjectForm() {
 		departmentId = dept?.id || '';
 	}
 
-	// 获取执行人ID
-	const executorId = availableProjectExecutors.value.find(e => e.name === projectForm.executor)?.id || '';
-
-	const payload = {
-		departmentId,
-		customerName: projectForm.customerName.trim(),
-		customerContact: projectForm.customerContact.trim(),
-		projectName: projectForm.projectName.trim(),
-		projectDesc: projectForm.projectDesc.trim(),
-		executorId,
-		deadline: projectForm.deadline,
-		priority: projectForm.priority,
-	};
+	// 获取执行人ID（使用完整列表，不受部门过滤影响）
+	const executorId = projectExecutorEmployees.value.find(e => e.name === projectForm.executor)?.id || '';
+	const attachmentFiles = extractUploadRawFiles(projectForm.attachmentFiles);
+	let attachmentIds = [];
+	const attachmentValidation = validateProjectAttachmentFiles(attachmentFiles);
+	if (!attachmentValidation.valid) {
+		ElMessage.warning(attachmentValidation.message);
+		return;
+	}
 
 	try {
+		if (attachmentFiles.length) {
+			projectUploadProgressVisible.value = true;
+			projectUploadProgress.value = 0;
+			projectUploadProgressText.value = `正在上传附件（0/${attachmentFiles.length}）`;
+			await nextTick();
+			const formData = new FormData();
+			formData.append('bizType', 'project');
+			attachmentFiles.forEach((file) => {
+				formData.append('files', file);
+			});
+			const uploadRes = await apiUploadFilesWithProgress(formData, (event) => {
+				const total = Number(event?.total || 0);
+				const loaded = Number(event?.loaded || 0);
+				const percent = total > 0 ? Math.min(100, Math.round((loaded / total) * 100)) : 0;
+				projectUploadProgress.value = percent;
+				projectUploadProgressText.value = `正在上传附件（${percent}%）`;
+			});
+			attachmentIds = extractAttachmentIds(uploadRes);
+			if (!attachmentIds.length) {
+				throw new Error('项目附件上传失败，请重试');
+			}
+			projectUploadProgress.value = 100;
+			projectUploadProgressText.value = '附件上传完成';
+			await new Promise((resolve) => setTimeout(resolve, 500));
+			projectUploadProgressVisible.value = false;
+		} else {
+			projectUploadProgressVisible.value = false;
+			projectUploadProgress.value = 0;
+			projectUploadProgressText.value = '准备上传附件...';
+		}
+
+		const payload = {
+			departmentId,
+			customerName: projectForm.customerName.trim(),
+			customerContact: projectForm.customerContact.trim(),
+			projectName: projectForm.projectName.trim(),
+			projectDesc: projectForm.projectDesc.trim(),
+			executorId,
+			deadline: projectForm.deadline,
+			priority: projectForm.priority,
+			attachmentIds,
+		};
+
 		const res = await createProject(payload);
 		if (res && res.code === 0 && res.data) {
 			const newProject = {
@@ -3879,16 +3597,16 @@ async function submitProjectForm() {
 				leader: safeGet(res.data.leader),
 				executorId: safeGet(res.data.executorId),
 				executor: safeGet(res.data.executor),
-				createdAt: safeGet(res.data.createdAt),
+				createdAt: normalizeApiDateLike(res.data.createdAt),
 				progress: Number(res.data.progress) || 0,
 				currentStageKey: safeGet(res.data.currentStageKey),
 				currentStage: safeGet(res.data.currentStage),
 				status: safeGet(res.data.status, '进行中'),
-				deadline: safeGet(res.data.deadline),
-				attachments: 0,
+				deadline: normalizeApiDateLike(res.data.deadline),
+				attachments: attachmentIds.length,
 				priority: safeGet(res.data.priority, '中'),
 				projectDesc: safeGet(res.data.projectDesc),
-				attachmentList: [],
+				attachmentList: extractUploadFileNames(projectForm.attachmentFiles),
 				progressHistory: [],
 				progressSubmissions: [],
 			};
@@ -3898,34 +3616,88 @@ async function submitProjectForm() {
 			if (apiData.projects.length > 0) {
 				apiData.projects.unshift(newProject);
 			}
+			projectUploadProgressVisible.value = false;
+			projectUploadProgress.value = 0;
+			projectUploadProgressText.value = '准备上传附件...';
+			projectFormVisible.value = false;
+			projectTablePage.value = 1;
+			resetProjectForm();
 			ElMessage.success('项目已下发');
 		} else {
 			ElMessage.error(res?.message || '项目下发失败');
+			return;
 		}
 	} catch (err) {
-		ElMessage.error(err?.message || '项目下发失败');
+		projectUploadProgressVisible.value = false;
+		projectUploadProgress.value = 0;
+		projectUploadProgressText.value = '准备上传附件...';
+		handleApiError(err, '项目下发失败');
+		return;
 	}
-
-	projectFormVisible.value = false;
-	projectTablePage.value = 1;
-	resetProjectForm();
 }
 
 async function submitProjectProgress() {
-	if (!projectProgressFormRef.value) return;
-	await projectProgressFormRef.value.validate();
+	// 获取子组件暴露的表单 ref
+	const childFormRef = projectManagementRef.value?.projectProgressFormRef;
+	if (!childFormRef) return;
+	await childFormRef.validate();
 	const target = progressTargetProject.value;
 	if (!target || !canSubmitProjectProgress(target)) return;
 	const stage = selectedProjectProgressStage.value;
 	if (!stage) return;
 	const nextProgress = Math.max(projectProgressBaseline.value, Number(projectProgressForm.progress || 0));
-	const attachments = extractUploadFileNames(projectProgressForm.attachmentFiles);
-	const submitTime = formatDateTime(new Date());
+	const attachmentFiles = extractUploadRawFiles(projectProgressForm.attachmentFiles);
+	let attachmentIds = [];
+	const attachmentValidation = validateProjectAttachmentFiles(attachmentFiles);
+	if (!attachmentValidation.valid) {
+		ElMessage.warning(attachmentValidation.message);
+		return;
+	}
+
+	try {
+		if (attachmentFiles.length) {
+			projectUploadProgressVisible.value = true;
+			projectUploadProgress.value = 0;
+			projectUploadProgressText.value = `正在上传进度附件（0/${attachmentFiles.length}）`;
+			await nextTick();
+			const formData = new FormData();
+			formData.append('bizType', 'projectProgress');
+			attachmentFiles.forEach((file) => {
+				formData.append('files', file);
+			});
+			const uploadRes = await apiUploadFilesWithProgress(formData, (event) => {
+				const total = Number(event?.total || 0);
+				const loaded = Number(event?.loaded || 0);
+				const percent = total > 0 ? Math.min(100, Math.round((loaded / total) * 100)) : 0;
+				projectUploadProgress.value = percent;
+				projectUploadProgressText.value = `正在上传进度附件（${percent}%）`;
+			});
+			attachmentIds = extractAttachmentIds(uploadRes);
+			if (!attachmentIds.length) {
+				throw new Error('进度附件上传失败，请重试');
+			}
+			projectUploadProgress.value = 100;
+			projectUploadProgressText.value = '进度附件上传完成';
+			await new Promise((resolve) => setTimeout(resolve, 500));
+			projectUploadProgressVisible.value = false;
+		} else {
+			projectUploadProgressVisible.value = false;
+			projectUploadProgress.value = 0;
+			projectUploadProgressText.value = '准备上传附件...';
+		}
+	} catch (err) {
+		projectUploadProgressVisible.value = false;
+		projectUploadProgress.value = 0;
+		projectUploadProgressText.value = '准备上传附件...';
+		handleApiError(err, '进度附件上传失败');
+		return;
+	}
 
 	const payload = {
 		stageKey: stage.key,
 		progress: nextProgress,
 		content: projectProgressForm.content.trim(),
+		attachmentIds,
 	};
 
 	try {
@@ -3934,81 +3706,34 @@ async function submitProjectProgress() {
 			// 更新项目数据
 			const updatedProject = res.data.project || res.data;
 			target.progress = Number(updatedProject.progress) || nextProgress;
-			target.currentStageKey = safeGet(updatedProject.currentStageKey, stage.key);
-			target.status = safeGet(updatedProject.status, stage.key === 'payment_received' ? '待审核' : '进行中');
+			target.currentStageKey = safeGet(updatedProject.currentStageKey);
+			target.status = safeGet(updatedProject.status);
+			target.canAudit = Boolean(updatedProject.canAudit);
+			target.canSubmitProgress = normalizeOptionalBoolean(updatedProject.canSubmitProgress);
+			await refreshProjectDetail(target.id);
 			ElMessage.success(stage.key === 'payment_received' ? '已提交回款完成节点，等待管理员审核' : '项目进度已更新');
 		} else {
-			// 降级到模拟更新
-			target.progress = nextProgress;
-			target.currentStageKey = stage.key;
-			target.status = stage.key === 'payment_received' ? '待审核' : '进行中';
-			if (!Array.isArray(target.progressHistory)) {
-				target.progressHistory = [];
-			}
-			target.progressHistory.push({
-				date: DASHBOARD_TODAY,
-				progress: nextProgress,
-				stageKey: stage.key,
-			});
-			if (!Array.isArray(target.progressSubmissions)) {
-				target.progressSubmissions = [];
-			}
-			target.progressSubmissions.unshift({
-				id: `progress-${Date.now()}`,
-				date: submitTime,
-				stageKey: stage.key,
-				stageLabel: stage.label,
-				progress: nextProgress,
-				content: projectProgressForm.content.trim(),
-				operator: currentUser.value.name,
-				attachments,
-			});
-			if (attachments.length) {
-				target.attachmentList = [...getProjectAttachmentList(target), ...attachments];
-				target.attachments = target.attachmentList.length;
-			}
-			ElMessage.success(stage.key === 'payment_received' ? '已提交回款完成节点，等待管理员审核' : '项目进度已更新');
+			handleApiError({ message: res?.message || '项目进度提交失败', isBusinessError: res && res.code !== 0, code: res?.code }, '项目进度提交失败');
+			return;
 		}
-	} catch {
-		// 降级到模拟更新
-		target.progress = nextProgress;
-		target.currentStageKey = stage.key;
-		target.status = stage.key === 'payment_received' ? '待审核' : '进行中';
-		if (!Array.isArray(target.progressHistory)) {
-			target.progressHistory = [];
-		}
-		target.progressHistory.push({
-			date: DASHBOARD_TODAY,
-			progress: nextProgress,
-			stageKey: stage.key,
-		});
-		if (!Array.isArray(target.progressSubmissions)) {
-			target.progressSubmissions = [];
-		}
-		target.progressSubmissions.unshift({
-			id: `progress-${Date.now()}`,
-			date: submitTime,
-			stageKey: stage.key,
-			stageLabel: stage.label,
-			progress: nextProgress,
-			content: projectProgressForm.content.trim(),
-			operator: currentUser.value.name,
-			attachments,
-		});
-		if (attachments.length) {
-			target.attachmentList = [...getProjectAttachmentList(target), ...attachments];
-			target.attachments = target.attachmentList.length;
-		}
-		ElMessage.success(stage.key === 'payment_received' ? '已提交回款完成节点，等待管理员审核' : '项目进度已更新');
+	} catch (err) {
+		projectUploadProgressVisible.value = false;
+		projectUploadProgress.value = 0;
+		projectUploadProgressText.value = '准备上传附件...';
+		handleApiError(err, '项目进度提交失败');
+		return;
 	}
 
+	projectUploadProgressVisible.value = false;
+	projectUploadProgress.value = 0;
+	projectUploadProgressText.value = '准备上传附件...';
 	projectProgressVisible.value = false;
 	resetProjectProgressForm();
 }
 
 async function approveProject(project) {
 	if (!canAuditProject(project)) return;
-	const target = projects.find((item) => item.id === project.id);
+	const target = apiData.projects.find((item) => item.id === project.id) || projects.find((item) => item.id === project.id);
 	if (!target) return;
 
 	try {
@@ -4017,37 +3742,15 @@ async function approveProject(project) {
 			target.status = safeGet(res.data.status, '已完成');
 			target.progress = Number(res.data.progress) || 100;
 			target.currentStageKey = safeGet(res.data.currentStageKey, 'payment_received');
-			appendProjectAuditLog(target, '审核通过', '项目验收通过，状态已更新为已完成。');
+			target.canAudit = Boolean(res.data.canAudit);
+			target.canSubmitProgress = normalizeOptionalBoolean(res.data.canSubmitProgress);
+			await refreshProjectDetail(target.id);
 			ElMessage.success('项目已审核通过');
 		} else {
-			// 降级到模拟更新
-			target.status = '已完成';
-			target.progress = 100;
-			target.currentStageKey = 'payment_received';
-			if (!Array.isArray(target.progressHistory)) {
-				target.progressHistory = [];
-			}
-			const latestProgress = target.progressHistory[target.progressHistory.length - 1];
-			if (!latestProgress || latestProgress.progress !== 100 || latestProgress.date !== DASHBOARD_TODAY) {
-				target.progressHistory.push({ date: DASHBOARD_TODAY, progress: 100, stageKey: 'payment_received' });
-			}
-			appendProjectAuditLog(target, '审核通过', '项目验收通过，状态已更新为已完成。');
-			ElMessage.success('项目已审核通过');
+			handleApiError({ message: res?.message || '项目审核失败', isBusinessError: res && res.code !== 0, code: res?.code }, '项目审核失败');
 		}
-	} catch {
-		// 降级到模拟更新
-		target.status = '已完成';
-		target.progress = 100;
-		target.currentStageKey = 'payment_received';
-		if (!Array.isArray(target.progressHistory)) {
-			target.progressHistory = [];
-		}
-		const latestProgress = target.progressHistory[target.progressHistory.length - 1];
-		if (!latestProgress || latestProgress.progress !== 100 || latestProgress.date !== DASHBOARD_TODAY) {
-			target.progressHistory.push({ date: DASHBOARD_TODAY, progress: 100, stageKey: 'payment_received' });
-		}
-		appendProjectAuditLog(target, '审核通过', '项目验收通过，状态已更新为已完成。');
-		ElMessage.success('项目已审核通过');
+	} catch (err) {
+		handleApiError(err, '项目审核失败');
 	}
 }
 
@@ -4060,7 +3763,7 @@ async function rejectProject(project) {
 			inputPlaceholder: '请输入驳回原因',
 			inputValidator: (inputValue) => Boolean(String(inputValue || '').trim()) || '请填写驳回原因',
 		});
-		const target = projects.find((item) => item.id === project.id);
+		const target = apiData.projects.find((item) => item.id === project.id) || projects.find((item) => item.id === project.id);
 		if (!target) return;
 		const rollbackStage = getProjectRejectRollbackStage(target);
 
@@ -4070,17 +3773,17 @@ async function rejectProject(project) {
 				target.status = safeGet(res.data.status, '进行中');
 				target.progress = Number(res.data.progress) || rollbackStage.fixedProgress;
 				target.currentStageKey = safeGet(res.data.currentStageKey, rollbackStage.key);
+				target.canAudit = Boolean(res.data.canAudit);
+				target.canSubmitProgress = normalizeOptionalBoolean(res.data.canSubmitProgress);
+				await refreshProjectDetail(target.id);
 			} else {
-				target.status = '进行中';
-				target.progress = rollbackStage.fixedProgress;
-				target.currentStageKey = rollbackStage.key;
+				handleApiError({ message: res?.message || '项目驳回失败', isBusinessError: res && res.code !== 0, code: res?.code }, '项目驳回失败');
+				return;
 			}
-		} catch {
-			target.status = '进行中';
-			target.progress = rollbackStage.fixedProgress;
-			target.currentStageKey = rollbackStage.key;
+		} catch (err) {
+			handleApiError(err, '项目驳回失败');
+			return;
 		}
-		appendProjectAuditLog(target, '驳回', String(value).trim());
 		ElMessage.warning('项目已驳回，待员工继续补充');
 	} catch {
 		// Ignore cancel.
@@ -4092,26 +3795,53 @@ function getProjectRejectRollbackStage(project) {
 		...(project?.progressSubmissions || []),
 		...(project?.progressHistory || []),
 	].some((item) => item?.stageKey === 'final_invoice_completed' || item?.stageKey === 'prepayment_received' || item?.stageKey === 'prepayment_invoice');
-	return PROJECT_STAGE_DEFINITIONS.find((item) => item.key === (hasPrepaymentBranch ? 'final_invoice_completed' : 'invoice_completed'))
-		|| PROJECT_STAGE_DEFINITIONS.find((item) => item.key === 'invoice_completed');
+	const rollbackKey = hasPrepaymentBranch ? 'final_invoice_completed' : 'invoice_completed';
+	return findProjectStageByKey(rollbackKey) || {
+		key: rollbackKey,
+		label: rollbackKey,
+		min: Number(project?.progress || 0),
+		max: Number(project?.progress || 0),
+		fixedProgress: Number(project?.progress || 0),
+		selectable: false,
+	};
 }
 
 function canAuditProject(project) {
 	if (!project || currentRole.value !== ROLE_ENUM.ADMIN) return false;
-	return project.status === '待审核'
-		&& Number(project.progress) >= 100
-		&& getProjectCurrentStageKey(project) === 'payment_received'
-		&& scopedProjects.value.some((item) => item.id === project.id);
+	return Boolean(project.canAudit) && scopedProjects.value.some((item) => item.id === project.id);
 }
 
 function canSubmitProjectProgress(project) {
-	if (!project || currentRole.value !== ROLE_ENUM.EMPLOYEE) return false;
-	return project.executor === currentUser.value.name && project.status === '进行中';
+	if (!project || ![ROLE_ENUM.MANAGER, ROLE_ENUM.EMPLOYEE].includes(currentRole.value)) return false;
+	if (!scopedProjects.value.some((item) => item.id === project.id)) return false;
+	if (Boolean(project.canSubmitProgress)) return true;
+	if (!isProjectOwnedByCurrentUser(project)) return false;
+	return safeGet(project.status) !== '已完成';
 }
 
 function canCommentReport(report) {
 	if (!report || currentRole.value !== ROLE_ENUM.MANAGER) return false;
 	return report.department === currentUser.value.department;
+}
+
+function isReportOwnedByCurrentUser(report) {
+	if (!report) return false;
+	const currentUserIds = [currentUser.value.id, currentUser.value.employeeId, currentUser.value.userId]
+		.map((item) => String(item || '').trim())
+		.filter(Boolean);
+	const reportEmployeeId = String(report.employeeId || report.userId || '').trim();
+	if (reportEmployeeId && currentUserIds.includes(reportEmployeeId)) return true;
+	const currentName = String(currentUser.value.name || '').trim();
+	return Boolean(currentName && String(report.employeeName || '').trim() === currentName);
+}
+
+function getReportSubmitDate(report) {
+	return String(normalizeApiDateLike(report?.submitDate || '') || '').slice(0, 10);
+}
+
+function canDeleteReport(report) {
+	if (!report?.id || !canWriteReport.value) return false;
+	return isReportOwnedByCurrentUser(report) && getReportSubmitDate(report) === REPORT_RUNTIME_TODAY;
 }
 
 function resetProjectForm() {
@@ -4127,8 +3857,13 @@ function resetProjectForm() {
 		attachmentFiles: [],
 	});
 	nextTick(() => {
-		projectFormRef.value?.clearValidate();
+		projectManagementRef.value?.projectFormRef?.clearValidate();
 	});
+}
+
+function resetProjectFormAndClose() {
+	resetProjectForm();
+	projectFormVisible.value = false;
 }
 
 function resetProjectProgressForm(project = null) {
@@ -4143,7 +3878,7 @@ function resetProjectProgressForm(project = null) {
 	});
 	applyProjectStageProgressPreset();
 	nextTick(() => {
-		projectProgressFormRef.value?.clearValidate();
+		projectManagementRef.value?.projectProgressFormRef?.clearValidate();
 	});
 }
 
@@ -4155,7 +3890,7 @@ function resetReportForm(report = null) {
 		id: report?.id || '',
 		date: report?.submitDate || draft?.date || REPORT_RUNTIME_TODAY,
 		title: report?.title || draft?.title || '',
-		relatedProjectId: report?.relatedProjectId || draft?.relatedProjectId || '',
+		relatedProjectIds: normalizeReportRelatedProjectIds(report || draft),
 		workContent: report?.workContent || draft?.workContent || '',
 		tomorrowPlan: report?.tomorrowPlan || draft?.tomorrowPlan || '',
 		problems: report?.problems || draft?.problems || '',
@@ -4196,63 +3931,129 @@ function applyProjectStageProgressPreset() {
 }
 
 function getProjectCurrentStageKey(project) {
-	if (!project) return 'task_issued';
-	if (project.currentStageKey) return project.currentStageKey;
-	if (Number(project.progress) >= 100) return 'payment_received';
-	if (Number(project.progress) >= 95) return 'final_invoice_completed';
-	if (Number(project.progress) >= 90) return 'invoice_completed';
-	if (Number(project.progress) >= 85) return 'prepayment_invoice';
-	if (Number(project.progress) > 10) return 'task_execution';
-	if (Number(project.progress) === 10) return 'contract_signed';
-	return 'task_issued';
+	return safeGet(project?.currentStageKey);
 }
 
-function getAvailableProjectStageOptions(project) {
+function getAllowedNextProjectStageKeys(project) {
 	const currentStageKey = getProjectCurrentStageKey(project);
+	const progress = Number(project?.progress || 0);
 	switch (currentStageKey) {
 	case 'task_issued':
-		return getProjectStageDefinitionsByKeys(['contract_signed']);
+		return ['contract_signed'];
 	case 'contract_signed':
-		return getProjectStageDefinitionsByKeys(['task_execution']);
+		return ['task_execution'];
 	case 'task_execution':
-		return getProjectStageDefinitionsByKeys(
-			Number(project?.progress || 0) >= 80
-				? ['task_execution', 'prepayment_invoice', 'invoice_completed']
-				: ['task_execution']
-		);
+		return progress < 80 ? ['task_execution'] : ['prepayment_invoice', 'invoice_completed'];
 	case 'prepayment_invoice':
-		return getProjectStageDefinitionsByKeys(['prepayment_received']);
+		return ['prepayment_received'];
 	case 'prepayment_received':
-		return getProjectStageDefinitionsByKeys(['final_invoice_completed']);
+		return ['final_invoice_completed'];
 	case 'final_invoice_completed':
-		return getProjectStageDefinitionsByKeys(['payment_received']);
 	case 'invoice_completed':
-		return getProjectStageDefinitionsByKeys(['payment_received']);
+		return ['payment_received'];
 	case 'payment_received':
+		return [];
 	default:
 		return [];
 	}
+}
+
+function getAvailableProjectStageOptions(project) {
+	const projectStages = safeArray(project?.availableProgressStages)
+		.map((item) => normalizeProjectStage(item))
+		.filter((item) => Boolean(item?.key) && item.selectable !== false);
+	const stageCatalog = getProjectStageCatalog().filter((item) => Boolean(item?.key) && item.selectable !== false);
+	const allowedKeys = getAllowedNextProjectStageKeys(project);
+	if (allowedKeys.length) {
+		return allowedKeys
+			.map((key) => projectStages.find((item) => item.key === key) || stageCatalog.find((item) => item.key === key))
+			.filter(Boolean);
+	}
+	if (projectStages.length) return projectStages;
+	const currentStageKey = getProjectCurrentStageKey(project);
+	if (!stageCatalog.length) return [];
+	const currentStageIndex = stageCatalog.findIndex((item) => item.key === currentStageKey);
+	if (currentStageIndex >= 0) {
+		return stageCatalog.slice(currentStageIndex + 1);
+	}
+	return stageCatalog.filter((item) => Number(item.min) >= Number(project?.progress || 0));
+}
+
+function isProjectOwnedByCurrentUser(project) {
+	if (!project || !currentUser.value?.id) return false;
+	const executorId = String(safeGet(project.executorId, '')).trim();
+	const leaderId = String(safeGet(project.leaderId, '')).trim();
+	const userId = String(safeGet(currentUser.value.id, '')).trim();
+	const executorName = String(safeGet(project.executor, '')).trim();
+	const leaderName = String(safeGet(project.leader, '')).trim();
+	const userName = String(safeGet(currentUser.value.name, '')).trim();
+	const loginName = String(safeGet(currentUser.value.userName, '')).trim();
+	return [executorId, leaderId, executorName, leaderName]
+		.some((value) => Boolean(value) && [userId, userName, loginName].includes(value));
 }
 
 async function submitReportForm() {
 	if (!reportFormRef.value || !canWriteReport.value) return;
 	await reportFormRef.value.validate();
 	const employeeId = currentUser.value.id;
-	const existingSameDayReport = reports.find((item) => item.employeeId === employeeId && item.submitDate === reportForm.date);
+	const existingSameDayReport = scopedReports.value.find((item) => item.employeeId === employeeId && item.submitDate === reportForm.date);
 	if (existingSameDayReport) {
 		ElMessage.warning('每位员工当天只能提交 1 篇日报，且提交后不能修改。');
 		return;
 	}
+	const attachmentFiles = extractUploadRawFiles(reportForm.attachmentFiles);
+	let attachmentIds = [];
 	const attachmentList = extractUploadFileNames(reportForm.attachmentFiles);
+	const attachmentValidation = validateReportAttachmentFiles(attachmentFiles);
+	if (!attachmentValidation.valid) {
+		ElMessage.warning(attachmentValidation.message);
+		return;
+	}
 	const title = reportForm.title.trim() || buildReportDefaultTitle(reportForm.date);
+
+	try {
+		if (attachmentFiles.length) {
+			projectUploadProgressVisible.value = true;
+			projectUploadProgress.value = 0;
+			projectUploadProgressText.value = `正在上传日报附件（0/${attachmentFiles.length}）`;
+			await nextTick();
+			const formData = new FormData();
+			formData.append('bizType', 'report');
+			attachmentFiles.forEach((file) => {
+				formData.append('files', file);
+			});
+			const uploadRes = await apiUploadFilesWithProgress(formData, (event) => {
+				const total = Number(event?.total || 0);
+				const loaded = Number(event?.loaded || 0);
+				const percent = total > 0 ? Math.min(100, Math.round((loaded / total) * 100)) : 0;
+				projectUploadProgress.value = percent;
+				projectUploadProgressText.value = `正在上传日报附件（${percent}%）`;
+			});
+			attachmentIds = extractAttachmentIds(uploadRes);
+			if (!attachmentIds.length) {
+				throw new Error('日报附件上传失败，请重试');
+			}
+			projectUploadProgress.value = 100;
+			projectUploadProgressText.value = '日报附件上传完成';
+			await new Promise((resolve) => setTimeout(resolve, 500));
+		}
+	} catch (err) {
+		projectUploadProgressVisible.value = false;
+		projectUploadProgress.value = 0;
+		projectUploadProgressText.value = '准备上传附件...';
+		handleApiError(err, '日报附件上传失败');
+		return;
+	}
 
 	const payload = {
 		date: reportForm.date,
 		title,
-		relatedProjectId: reportForm.relatedProjectId || undefined,
+		relatedProjectIds: reportForm.relatedProjectIds.length ? reportForm.relatedProjectIds : undefined,
+		relatedProjectId: reportForm.relatedProjectIds.length ? reportForm.relatedProjectIds.join(',') : undefined,
 		workContent: reportForm.workContent.trim(),
 		tomorrowPlan: reportForm.tomorrowPlan.trim(),
 		problems: reportForm.problems.trim(),
+		attachmentIds,
 	};
 
 	try {
@@ -4267,31 +4068,41 @@ async function submitReportForm() {
 				department: safeGet(res.data.department, currentUser.value.department),
 				submitDate: safeGet(res.data.submitDate, reportForm.date),
 				submitTime: safeGet(res.data.submitTime, formatDateTime(new Date())),
-				relatedProjectId: safeGet(res.data.relatedProjectId),
-				relatedProject: safeGet(res.data.relatedProject, getProjectNameById(reportForm.relatedProjectId)),
+				relatedProjectId: safeGet(res.data.relatedProjectId, payload.relatedProjectId),
+				relatedProjectIds: normalizeReportRelatedProjectIds(res.data, reportForm.relatedProjectIds),
+				relatedProject: safeGet(res.data.relatedProject, getProjectNamesByIds(reportForm.relatedProjectIds)),
 				workContent: safeGet(res.data.workContent, reportForm.workContent.trim()),
 				tomorrowPlan: safeGet(res.data.tomorrowPlan, reportForm.tomorrowPlan.trim()),
 				problems: safeGet(res.data.problems, reportForm.problems.trim()),
 				content: safeGet(res.data.content, buildReportSummary(reportForm.workContent)),
-				attachmentList,
+				attachmentList: safeArray(res.data.attachments).length
+					? safeArray(res.data.attachments).map((attachment, index) => normalizeReportAttachment(attachment, `created-${index}`))
+					: attachmentList.map((name, index) => normalizeReportAttachment({ fileName: name }, `created-local-${index}`)),
 				status: safeGet(res.data.status, '已提交'),
-				leaderComment: '',
-				commentAuthor: '',
-				commentTime: '',
-				score: '',
+				leaderComment: safeGet(res.data.leaderComment),
+				commentAuthor: safeGet(res.data.commentAuthor),
+				commentTime: normalizeApiDateLike(res.data.commentTime, { withTime: true }),
+				score: safeGet(res.data.score),
+				canViewDetail: Boolean(res.data.canViewDetail ?? true),
+				canComment: Boolean(res.data.canComment),
 			};
-			reports.unshift(newReport);
-			if (apiData.reports.length > 0) {
-				apiData.reports.unshift(newReport);
-			}
+			apiData.reports.unshift(newReport);
+			reportListState.todayReport = newReport;
+			reportListState.canWriteToday = false;
+			await loadReports({ pageIndex: 1 });
 			ElMessage.success('日报已提交');
 		} else {
-			ElMessage.error(res?.message || '日报提交失败');
+			handleApiError({ message: res?.message || '日报提交失败', isBusinessError: res && res.code !== 0, code: res?.code }, '日报提交失败');
+			return;
 		}
 	} catch (err) {
-		ElMessage.error(err?.message || '日报提交失败');
+		handleApiError(err, '日报提交失败');
+		return;
 	}
 
+	projectUploadProgressVisible.value = false;
+	projectUploadProgress.value = 0;
+	projectUploadProgressText.value = '准备上传附件...';
 	clearPersistedReportDraft(employeeId, reportForm.date);
 	reportFormVisible.value = false;
 	resetReportForm();
@@ -4319,6 +4130,13 @@ async function submitReportComment() {
 				commentAuthor: safeGet(res.data.commentAuthor, currentUser.value.name),
 				commentTime: safeGet(res.data.commentTime, formatDateTime(new Date())),
 			});
+			reportListState.metrics = reportListState.metrics
+				? {
+					...reportListState.metrics,
+					pendingCommentCount: Math.max(0, Number(reportListState.metrics.pendingCommentCount || 0) - 1),
+					commentedCount: Number(reportListState.metrics.commentedCount || 0) + 1,
+				}
+				: reportListState.metrics;
 		} else {
 			Object.assign(target, {
 				status: '已批注',
@@ -4328,14 +4146,9 @@ async function submitReportComment() {
 				commentTime: formatDateTime(new Date()),
 			});
 		}
-	} catch {
-		Object.assign(target, {
-			status: '已批注',
-			leaderComment: reportCommentForm.leaderComment.trim(),
-			score: reportCommentForm.score,
-			commentAuthor: currentUser.value.name,
-			commentTime: formatDateTime(new Date()),
-		});
+	} catch (err) {
+		handleApiError(err, '批注保存失败');
+		return;
 	}
 	reportCommentVisible.value = false;
 	resetReportCommentForm();
@@ -4344,12 +4157,46 @@ async function submitReportComment() {
 
 function getProjectStageDefinitionsByKeys(keys) {
 	return keys
-		.map((key) => PROJECT_STAGE_DEFINITIONS.find((item) => item.key === key))
+		.map((key) => findProjectStageByKey(key))
 		.filter(Boolean);
 }
 
 function getProjectStageLabel(stageKey) {
-	return PROJECT_STAGE_DEFINITIONS.find((item) => item.key === stageKey)?.label || '';
+	return findProjectStageByKey(stageKey)?.label || '';
+}
+
+function normalizeProjectStage(stage) {
+	if (!stage) return null;
+	const key = safeGet(stage.key || stage.stageKey);
+	if (!key) return null;
+	const fixedProgress = stage.fixedProgress;
+	return {
+		key,
+		label: safeGet(stage.label),
+		min: Number(stage.min) || 0,
+		max: Number(stage.max) || 0,
+		fixedProgress: fixedProgress === null || fixedProgress === undefined ? undefined : Number(fixedProgress),
+		selectable: stage.selectable !== false,
+	};
+}
+
+function getProjectStageCatalog() {
+	return safeArray(apiData.options?.projectStages)
+		.map((item) => normalizeProjectStage(item))
+		.filter(Boolean);
+}
+
+function findProjectStageByKey(stageKey) {
+	if (!stageKey) return null;
+	const detailStage = safeArray(currentProjectDetail.value?.availableProgressStages)
+		.map((item) => normalizeProjectStage(item))
+		.find((item) => item?.key === stageKey);
+	if (detailStage) return detailStage;
+	const progressStage = safeArray(progressTargetProject.value?.availableProgressStages)
+		.map((item) => normalizeProjectStage(item))
+		.find((item) => item?.key === stageKey);
+	if (progressStage) return progressStage;
+	return getProjectStageCatalog().find((item) => item.key === stageKey) || null;
 }
 
 function createProjectId() {
@@ -4379,9 +4226,55 @@ function buildReportSummary(content) {
 		.slice(0, 50);
 }
 
+function splitRelatedProjectNames(value) {
+	return String(value || '')
+		.split(/[,，、]/)
+		.map((item) => item.trim())
+		.filter(Boolean);
+}
+
+function splitRelatedProjectIds(value) {
+	return String(value || '')
+		.split(/[,，、]/)
+		.map((item) => item.trim())
+		.filter(Boolean);
+}
+
+function findProjectById(projectId) {
+	if (!projectId) return null;
+	const normalizedId = String(projectId).trim();
+	return apiData.projects.find((item) => String(item.id) === normalizedId)
+		|| projectListState.items.find((item) => String(item.id) === normalizedId)
+		|| projects.find((item) => String(item.id) === normalizedId)
+		|| null;
+}
+
 function getProjectNameById(projectId) {
 	if (!projectId) return '';
-	return projects.find((item) => item.id === projectId)?.projectName || '';
+	return findProjectById(projectId)?.projectName || '';
+}
+
+function getProjectNamesByIds(projectIds) {
+	return safeArray(projectIds)
+		.map((projectId) => getProjectNameById(projectId))
+		.filter(Boolean)
+		.join('、');
+}
+
+function normalizeReportRelatedProjectIds(source, fallbackIds = []) {
+	const explicitIdSource = Array.isArray(source?.relatedProjectIds)
+		? source.relatedProjectIds
+		: [source?.relatedProjectIds];
+	const explicitIds = explicitIdSource
+		.flatMap((item) => splitRelatedProjectIds(item))
+		.filter(Boolean);
+	if (explicitIds.length) return explicitIds;
+	const relatedProjectIds = splitRelatedProjectIds(safeGet(source?.relatedProjectId, ''));
+	if (relatedProjectIds.length) return relatedProjectIds;
+	const fallbackIdSource = Array.isArray(fallbackIds) ? fallbackIds : [fallbackIds];
+	return fallbackIdSource
+		.flatMap((item) => splitRelatedProjectIds(item))
+		.filter(Boolean);
 }
 
 function findDepartmentLeaderName(department) {
@@ -4397,19 +4290,55 @@ function appendProjectAuditLog(project, action, comment) {
 	project.auditLogs.unshift({
 		id: `audit-${Date.now()}`,
 		action,
-		date: `${DASHBOARD_TODAY} 19:00`,
+		date: `${REPORT_RUNTIME_TODAY} 19:00`,
 		operator: currentUser.value.name,
 		comment,
 	});
 }
 
 function getProjectAttachmentList(project) {
-	if (Array.isArray(project?.attachmentList) && project.attachmentList.length) {
-		return project.attachmentList;
+	const directAttachments = Array.isArray(project?.attachmentList) ? project.attachmentList : [];
+	const timelineAttachments = Array.isArray(project?.timeline)
+		? project.timeline.flatMap((entry) => safeArray(entry?.attachments)).filter(Boolean)
+		: [];
+	const normalizedAttachments = [...directAttachments, ...timelineAttachments]
+		.map((attachment, index) => {
+			if (!attachment) return null;
+			if (typeof attachment === 'string') {
+				return {
+					id: '',
+					fileName: attachment,
+					url: '',
+					key: `project-attachment-${index}-${attachment}`,
+				};
+			}
+			return {
+				id: safeGet(attachment.fileId || attachment.id || attachment.attachmentId),
+				fileName: safeGet(attachment.fileName || attachment.name),
+				url: safeGet(attachment.url),
+				key: safeGet(attachment.key || attachment.id || attachment.fileId || attachment.attachmentId, `project-attachment-${index}`),
+			};
+		})
+		.filter((attachment) => Boolean(attachment?.fileName));
+	const dedupedAttachments = [];
+	const seenAttachmentKeys = new Set();
+	normalizedAttachments.forEach((attachment) => {
+		const dedupeKey = String(attachment.id || attachment.url || attachment.fileName).trim();
+		if (!dedupeKey || seenAttachmentKeys.has(dedupeKey)) return;
+		seenAttachmentKeys.add(dedupeKey);
+		dedupedAttachments.push(attachment);
+	});
+	if (dedupedAttachments.length) {
+		return dedupedAttachments;
 	}
 	const count = Number(project?.attachments || 0);
 	return count > 0
-		? Array.from({ length: count }, (_, index) => `项目附件 ${index + 1}`)
+		? Array.from({ length: count }, (_, index) => ({
+			id: '',
+			fileName: `项目附件 ${index + 1}`,
+			url: '',
+			key: `project-attachment-fallback-${index + 1}`,
+		}))
 		: [];
 }
 
@@ -4418,17 +4347,57 @@ function getProjectAttachmentCount(project) {
 }
 
 function getReportAttachmentList(report) {
-	return Array.isArray(report?.attachmentList) ? report.attachmentList : [];
+	return safeArray(report?.attachmentList)
+		.map((attachment, index) => normalizeReportAttachment(attachment, `${safeGet(report?.id, 'report')}-${index}`))
+		.filter((attachment) => Boolean(attachment?.fileName));
 }
 
 function toUploadFileList(attachments) {
 	return Array.isArray(attachments)
-		? attachments.map((name, index) => ({
-			name,
-			uid: `${name}-${index}`,
+		? attachments.map((attachment, index) => {
+			const normalized = typeof attachment === 'string'
+				? normalizeReportAttachment({ fileName: attachment }, `upload-${index}`)
+				: normalizeReportAttachment(attachment, `upload-${index}`);
+			return {
+				name: normalized.fileName,
+				uid: String(normalized.uid || normalized.id || normalized.key || `upload-${index}`),
+				url: normalized.url,
 			status: 'success',
-		}))
+			};
+		})
 		: [];
+}
+
+function normalizeReportAttachment(attachment, fallbackKey = '') {
+	if (!attachment) return null;
+	if (typeof attachment === 'string') {
+		const fileName = String(attachment).trim();
+		if (!fileName) return null;
+		return {
+			id: '',
+			fileId: '',
+			fileName,
+			fileExt: getFileExtension(fileName),
+			url: '',
+			key: fallbackKey || fileName,
+			uid: fallbackKey || fileName,
+		};
+	}
+	const fileId = String(safeGet(attachment.fileId || attachment.id || attachment.attachmentId, '')).trim();
+	const fileName = String(safeGet(attachment.fileName || attachment.name, '')).trim();
+	if (!fileName && !fileId) return null;
+	return {
+		id: String(safeGet(attachment.id, fileId)).trim(),
+		fileId,
+		fileName: fileName || `附件${fileId ? `-${fileId}` : ''}`,
+		fileExt: safeGet(attachment.fileExt, getFileExtension(fileName)),
+		url: resolveAttachmentUrl(
+			safeGet(attachment.url),
+			fileId,
+		),
+		key: String(safeGet(attachment.key, fileId || fileName || fallbackKey)).trim() || fallbackKey,
+		uid: String(safeGet(attachment.uid, fileId || fileName || fallbackKey)).trim() || fallbackKey,
+	};
 }
 
 function parseAttachmentNames(text) {
@@ -4446,115 +4415,212 @@ function extractUploadFileNames(fileList) {
 		: [];
 }
 
-function downloadProjectAttachment(project, attachmentName, sourceLabel = '项目附件') {
-	if (!project || !attachmentName || typeof window === 'undefined') return;
-	const safeName = ensureDownloadFileName(attachmentName);
-	const fileContent = [
-		`文件名称：${safeName}`,
-		`所属项目：${project.projectName || '-'}`,
-		`来源位置：${sourceLabel}`,
-		`客户名称：${project.customerName || '-'}`,
-		`执行人：${project.executor || '-'}`,
-		`下载时间：${new Date().toLocaleString('zh-CN')}`,
-		'',
-		'当前为前端模拟下载文件，用于展示附件下载交互。',
-	].join('\n');
-	const blob = new Blob([fileContent], { type: 'text/plain;charset=utf-8' });
-	const objectUrl = URL.createObjectURL(blob);
-	const link = document.createElement('a');
-	link.href = objectUrl;
-	link.download = safeName;
-	document.body.appendChild(link);
-	link.click();
-	document.body.removeChild(link);
-	URL.revokeObjectURL(objectUrl);
-	ElMessage.success(`已开始下载：${safeName}`);
+function extractUploadRawFiles(fileList) {
+	return Array.isArray(fileList)
+		? fileList
+			.map((item) => item?.raw || item)
+			.filter((file) => file instanceof File)
+		: [];
 }
 
-function downloadAllProjectAttachments(project) {
+function getFileExtension(fileName) {
+	const normalized = String(fileName || '').trim().toLowerCase();
+	const lastDotIndex = normalized.lastIndexOf('.');
+	return lastDotIndex >= 0 ? normalized.slice(lastDotIndex) : '';
+}
+
+function getExtensionFromMimeType(contentType) {
+	switch (String(contentType || '').toLowerCase()) {
+	case 'image/jpeg':
+		return '.jpg';
+	case 'image/png':
+		return '.png';
+	case 'image/gif':
+		return '.gif';
+	case 'image/webp':
+		return '.webp';
+	case 'application/pdf':
+		return '.pdf';
+	case 'application/zip':
+	case 'application/x-zip-compressed':
+		return '.zip';
+	default:
+		return '';
+	}
+}
+
+function resolveDownloadFileName(preferredName, responseFileName, blob) {
+	const normalizedPreferred = ensureDownloadFileName(preferredName || '');
+	const normalizedResponse = ensureDownloadFileName(responseFileName || '');
+	const preferredExtension = getFileExtension(normalizedPreferred);
+	const responseExtension = getFileExtension(normalizedResponse);
+	const mimeExtension = getExtensionFromMimeType(blob?.type);
+
+	if (preferredExtension) {
+		if (responseExtension === '.txt' && mimeExtension && mimeExtension !== '.txt') {
+			return normalizedPreferred;
+		}
+		return normalizedPreferred;
+	}
+
+	if (normalizedResponse) {
+		if (responseExtension === '.txt' && mimeExtension && mimeExtension !== '.txt') {
+			return ensureDownloadFileName(`${normalizedResponse.slice(0, -4)}${mimeExtension}`);
+		}
+		return normalizedResponse;
+	}
+
+	return ensureDownloadFileName(`download${mimeExtension || ''}`);
+}
+
+function validateProjectAttachmentFiles(files) {
+	if (!Array.isArray(files)) return { valid: true, message: '' };
+	if (files.length > PROJECT_ATTACHMENT_MAX_COUNT) {
+		return { valid: false, message: `最多只能上传 ${PROJECT_ATTACHMENT_MAX_COUNT} 个附件` };
+	}
+	const totalSize = files.reduce((sum, file) => sum + Number(file?.size || 0), 0);
+	if (totalSize > PROJECT_ATTACHMENT_MAX_TOTAL_SIZE) {
+		return { valid: false, message: '附件总大小不能超过 200MB' };
+	}
+	for (const file of files) {
+		const extension = getFileExtension(file?.name);
+		if (!PROJECT_ATTACHMENT_ACCEPTED_EXTENSIONS.includes(extension)) {
+			return { valid: false, message: `仅支持上传 ${PROJECT_ATTACHMENT_ACCEPTED_EXTENSIONS.join('、')} 格式的文件` };
+		}
+		if (Number(file?.size || 0) > PROJECT_ATTACHMENT_MAX_SIZE) {
+			return { valid: false, message: '单个附件不能超过 50MB' };
+		}
+	}
+	return { valid: true, message: '' };
+}
+
+function validateReportAttachmentFiles(files) {
+	if (!Array.isArray(files)) return { valid: true, message: '' };
+	const maxCount = 10;
+	const maxSize = 10 * 1024 * 1024;
+	const acceptedExtensions = ['.jpg', '.png', '.pdf', '.doc', '.docx', '.xls', '.xlsx'];
+	if (files.length > maxCount) {
+		return { valid: false, message: `最多只能上传 ${maxCount} 个日报附件` };
+	}
+	for (const file of files) {
+		const extension = getFileExtension(file?.name);
+		if (!acceptedExtensions.includes(extension)) {
+			return { valid: false, message: `日报附件仅支持 ${acceptedExtensions.join('、')} 格式` };
+		}
+		if (Number(file?.size || 0) > maxSize) {
+			return { valid: false, message: '单个日报附件不能超过 10MB' };
+		}
+	}
+	return { valid: true, message: '' };
+}
+
+function extractAttachmentIds(uploadRes) {
+	const candidates = [
+		...safeArray(uploadRes?.data?.files),
+		...safeArray(uploadRes?.files),
+		...safeArray(uploadRes?.data),
+		...safeArray(uploadRes?.result?.files),
+	];
+	const fileIds = candidates
+		.map((item) => String(item?.id || item?.fileId || item?.attachmentId || '').trim())
+		.filter(Boolean);
+	if (fileIds.length) return [...new Set(fileIds)];
+	const singleFileId = String(uploadRes?.data?.id || uploadRes?.data?.fileId || uploadRes?.id || uploadRes?.fileId || '').trim();
+	return singleFileId ? [singleFileId] : [];
+}
+
+async function downloadProjectAttachment(project, attachment, sourceLabel = '项目附件') {
+	if (!project || !attachment || typeof window === 'undefined') return;
+	const attachmentObject = typeof attachment === 'string'
+		? getProjectAttachmentList(project).find((item) => item?.fileName === attachment) || null
+		: attachment;
+	const fileId = String(attachmentObject?.fileId || attachmentObject?.id || '').trim();
+	const fileName = ensureDownloadFileName(safeGet(attachmentObject?.fileName || attachment, '项目附件'));
+	if (!fileId) {
+		ElMessage.warning(`${sourceLabel}缺少附件标识，暂时无法下载`);
+		return;
+	}
+	try {
+		const { blob, fileName: responseFileName } = await apiDownloadFile(fileId);
+		const objectUrl = URL.createObjectURL(blob);
+		const link = document.createElement('a');
+		link.href = objectUrl;
+		link.download = resolveDownloadFileName(fileName, responseFileName, blob);
+		document.body.appendChild(link);
+		link.click();
+		document.body.removeChild(link);
+		URL.revokeObjectURL(objectUrl);
+		ElMessage.success(`已开始下载：${fileName}`);
+	} catch (err) {
+		handleApiError(err, '附件下载失败');
+	}
+}
+
+async function downloadAllProjectAttachments(project) {
 	if (!project || typeof window === 'undefined') return;
 	const attachments = getProjectAttachmentList(project);
 	if (!attachments.length) return;
-	const bundleName = ensureDownloadFileName(`${project.projectName || '项目附件'}-全部附件清单.txt`);
-	const fileContent = [
-		`打包名称：${bundleName}`,
-		`所属项目：${project.projectName || '-'}`,
-		`附件数量：${attachments.length}`,
-		`客户名称：${project.customerName || '-'}`,
-		`执行人：${project.executor || '-'}`,
-		`下载时间：${new Date().toLocaleString('zh-CN')}`,
-		'',
-		'附件列表：',
-		...attachments.map((attachment, index) => `${index + 1}. ${ensureDownloadFileName(attachment)}`),
-		'',
-		'当前为前端模拟打包下载，用于展示一键下载全部附件交互。',
-	].join('\n');
-	const blob = new Blob([fileContent], { type: 'text/plain;charset=utf-8' });
-	const objectUrl = URL.createObjectURL(blob);
-	const link = document.createElement('a');
-	link.href = objectUrl;
-	link.download = bundleName;
-	document.body.appendChild(link);
-	link.click();
-	document.body.removeChild(link);
-	URL.revokeObjectURL(objectUrl);
-	ElMessage.success(`已开始下载全部附件，共 ${attachments.length} 项`);
+	try {
+		const { blob, fileName } = await apiDownloadProjectAttachments(project.id);
+		const objectUrl = URL.createObjectURL(blob);
+		const link = document.createElement('a');
+		link.href = objectUrl;
+		link.download = ensureDownloadFileName(fileName || `${project.projectName || '项目附件'}-全部附件.zip`);
+		document.body.appendChild(link);
+		link.click();
+		document.body.removeChild(link);
+		URL.revokeObjectURL(objectUrl);
+		ElMessage.success(`已开始下载全部附件，共 ${attachments.length} 项`);
+	} catch (err) {
+		handleApiError(err, '全部附件下载失败');
+	}
 }
 
-function downloadReportAttachment(report, attachmentName) {
-	if (!report || !attachmentName || typeof window === 'undefined') return;
-	const safeName = ensureDownloadFileName(attachmentName);
-	const fileContent = [
-		`文件名称：${safeName}`,
-		`日报标题：${report.title || '-'}`,
-		`提交人：${report.employeeName || '-'}`,
-		`提交日期：${report.submitDate || '-'}`,
-		`关联项目：${report.relatedProject || '-'}`,
-		`下载时间：${new Date().toLocaleString('zh-CN')}`,
-		'',
-		'当前为前端模拟下载文件，用于展示日报附件下载交互。',
-	].join('\n');
-	const blob = new Blob([fileContent], { type: 'text/plain;charset=utf-8' });
-	const objectUrl = URL.createObjectURL(blob);
-	const link = document.createElement('a');
-	link.href = objectUrl;
-	link.download = safeName;
-	document.body.appendChild(link);
-	link.click();
-	document.body.removeChild(link);
-	URL.revokeObjectURL(objectUrl);
-	ElMessage.success(`已开始下载：${safeName}`);
+async function downloadReportAttachment(report, attachment) {
+	if (!report || !attachment || typeof window === 'undefined') return;
+	const attachmentObject = typeof attachment === 'string'
+		? normalizeReportAttachment({ fileName: attachment }, `report-${safeGet(report.id)}`)
+		: normalizeReportAttachment(attachment, `report-${safeGet(report.id)}`);
+	const fileId = String(safeGet(attachmentObject?.fileId || attachmentObject?.id, '')).trim();
+	const fileName = ensureDownloadFileName(safeGet(attachmentObject?.fileName, '日报附件'));
+	if (!fileId) {
+		ElMessage.warning('当前附件缺少附件标识，暂时无法下载');
+		return;
+	}
+	try {
+		const { blob, fileName: responseFileName } = await apiDownloadFile(fileId);
+		const objectUrl = URL.createObjectURL(blob);
+		const link = document.createElement('a');
+		link.href = objectUrl;
+		link.download = resolveDownloadFileName(fileName, responseFileName, blob);
+		document.body.appendChild(link);
+		link.click();
+		document.body.removeChild(link);
+		URL.revokeObjectURL(objectUrl);
+		ElMessage.success(`已开始下载：${fileName}`);
+	} catch (err) {
+		handleApiError(err, '日报附件下载失败');
+	}
 }
 
-function downloadAllReportAttachments(report) {
+async function downloadAllReportAttachments(report) {
 	if (!report || typeof window === 'undefined') return;
 	const attachments = getReportAttachmentList(report);
 	if (!attachments.length) return;
-	const bundleName = ensureDownloadFileName(`${report.title || '日报附件'}-全部附件清单.txt`);
-	const fileContent = [
-		`打包名称：${bundleName}`,
-		`日报标题：${report.title || '-'}`,
-		`提交人：${report.employeeName || '-'}`,
-		`提交日期：${report.submitDate || '-'}`,
-		`关联项目：${report.relatedProject || '-'}`,
-		`附件数量：${attachments.length}`,
-		`下载时间：${new Date().toLocaleString('zh-CN')}`,
-		'',
-		'附件列表：',
-		...attachments.map((attachment, index) => `${index + 1}. ${ensureDownloadFileName(attachment)}`),
-		'',
-		'当前为前端模拟打包下载，用于展示日报附件一键下载全部交互。',
-	].join('\n');
-	const blob = new Blob([fileContent], { type: 'text/plain;charset=utf-8' });
-	const objectUrl = URL.createObjectURL(blob);
-	const link = document.createElement('a');
-	link.href = objectUrl;
-	link.download = bundleName;
-	document.body.appendChild(link);
-	link.click();
-	document.body.removeChild(link);
-	URL.revokeObjectURL(objectUrl);
-	ElMessage.success(`已开始下载全部附件，共 ${attachments.length} 项`);
+	try {
+		const { blob, fileName } = await apiDownloadReportAttachments(report.id);
+		const objectUrl = URL.createObjectURL(blob);
+		const link = document.createElement('a');
+		link.href = objectUrl;
+		link.download = ensureDownloadFileName(fileName || `${report.title || '日报附件'}-全部附件.zip`);
+		document.body.appendChild(link);
+		link.click();
+		document.body.removeChild(link);
+		URL.revokeObjectURL(objectUrl);
+		ElMessage.success(`已开始下载全部附件，共 ${attachments.length} 项`);
+	} catch (err) {
+		handleApiError(err, '日报全部附件下载失败');
+	}
 }
 
 function ensureDownloadFileName(fileName) {
@@ -4604,6 +4670,10 @@ function buildProjectProgressFeedEntries(project) {
 }
 
 function buildProjectTimeline(project) {
+	if (Array.isArray(project?.timeline) && project.timeline.length) {
+		return [...project.timeline]
+			.sort((a, b) => normalizeTimelineDate(b.date) - normalizeTimelineDate(a.date));
+	}
 	const entries = [
 		{
 			key: `${project.id}-created`,
@@ -4652,8 +4722,9 @@ function buildProjectTimeline(project) {
 }
 
 function withTimelineTime(dateString, fallbackTime) {
-	if (!dateString) return `${DASHBOARD_TODAY} ${fallbackTime}`;
-	return String(dateString).includes(' ') ? String(dateString) : `${dateString} ${fallbackTime}`;
+	if (!dateString) return `${REPORT_RUNTIME_TODAY} ${fallbackTime}`;
+	const normalized = normalizeApiDateLike(dateString, { withTime: true });
+	return String(normalized).includes(' ') ? String(normalized) : `${normalized} ${fallbackTime}`;
 }
 
 function formatProgressFeedDate(dateString) {
@@ -4703,12 +4774,39 @@ function buildReportDraftPayload() {
 	return {
 		date: reportForm.date || REPORT_RUNTIME_TODAY,
 		title: reportForm.title || '',
-		relatedProjectId: reportForm.relatedProjectId || '',
+		relatedProjectIds: safeArray(reportForm.relatedProjectIds),
 		workContent: reportForm.workContent || '',
 		tomorrowPlan: reportForm.tomorrowPlan || '',
 		problems: reportForm.problems || '',
 		attachmentNames: extractUploadFileNames(reportForm.attachmentFiles),
 	};
+}
+
+function mergeReportProjectOptions(currentProjects, reportProjects) {
+	const currentList = safeArray(currentProjects);
+	const optionList = safeArray(reportProjects);
+	if (!optionList.length) return currentList;
+	const merged = [...currentList];
+	const existingIds = new Set(currentList.map((item) => String(safeGet(item?.id, '')).trim()).filter(Boolean));
+	optionList.forEach((item) => {
+		const id = String(safeGet(item?.id, '')).trim();
+		if (!id || existingIds.has(id)) return;
+		existingIds.add(id);
+		merged.push({
+			id,
+			projectName: safeGet(item.projectName),
+			departmentId: safeGet(item.departmentId),
+			department: safeGet(item.department),
+			executorId: safeGet(item.executorId),
+			executor: safeGet(item.executor),
+			status: safeGet(item.status),
+			deadline: '',
+			leader: '',
+			priority: '中',
+			progress: 0,
+		});
+	});
+	return merged;
 }
 
 function readPersistedReportDraft(userId, dateString = REPORT_RUNTIME_TODAY) {
@@ -4809,6 +4907,38 @@ function toPercent(value, total) {
 	return Math.round((Number(value || 0) / Number(total)) * 100);
 }
 
+function parseMetricNumber(value) {
+	if (value === null || value === undefined || value === '') return null;
+	if (typeof value === 'number' && Number.isFinite(value)) return value;
+	const normalized = String(value).replace(/,/g, '').trim();
+	const matched = normalized.match(/-?\d+(?:\.\d+)?/);
+	if (!matched) return null;
+	const parsed = Number(matched[0]);
+	return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normalizePercentValue(value) {
+	const parsed = parseMetricNumber(value);
+	if (parsed === null) return null;
+	const percent = parsed > 0 && parsed <= 1 ? parsed * 100 : parsed;
+	return Math.round(percent);
+}
+
+function parseMetricFraction(value) {
+	const normalized = String(value || '').replace(/,/g, '');
+	const matched = normalized.match(/(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)/);
+	if (!matched) return { current: null, total: null };
+	return {
+		current: Number(matched[1]),
+		total: Number(matched[2]),
+	};
+}
+
+function findOverviewSummaryCard(keys = []) {
+	const keySet = new Set(keys.map((key) => String(key)));
+	return safeArray(apiData.overview?.summaryCards).find((item) => keySet.has(String(item?.key || ''))) || null;
+}
+
 function isProjectProgressMatched(progress, filterValue) {
 	const current = Number(progress || 0);
 	switch (Number(filterValue)) {
@@ -4830,16 +4960,17 @@ function isProjectProgressMatched(progress, filterValue) {
 }
 
 function normalizeDate(dateString) {
-	return new Date(`${dateString}T00:00:00`);
+	const normalized = normalizeApiDateLike(dateString);
+	return new Date(`${normalized}T00:00:00`);
 }
 
 function isWithinDays(dateString, days) {
-	const diff = Math.round((normalizeDate(DASHBOARD_TODAY).getTime() - normalizeDate(dateString).getTime()) / DAY_MS);
+	const diff = Math.round((normalizeDate(REPORT_RUNTIME_TODAY).getTime() - normalizeDate(dateString).getTime()) / DAY_MS);
 	return diff >= 0 && diff <= Math.max(days - 1, 0);
 }
 
 function getDaysDiff(dateString) {
-	return Math.round((normalizeDate(dateString).getTime() - normalizeDate(DASHBOARD_TODAY).getTime()) / DAY_MS);
+	return Math.round((normalizeDate(dateString).getTime() - normalizeDate(REPORT_RUNTIME_TODAY).getTime()) / DAY_MS);
 }
 
 function formatDaysLeft(dateString) {
@@ -4889,7 +5020,7 @@ function renderProjectStatusChart() {
 				left: 'center',
 				top: '42%',
 				style: {
-					text: String(scopedProjects.value.length),
+					text: String(overviewProjectTotal.value),
 					fill: '#0f172a',
 					fontSize: 30,
 					fontWeight: 700,
@@ -4927,8 +5058,8 @@ function renderReportCharts() {
 		personalReportChartInstance = disposeChart(personalReportChartInstance);
 		reportRateChartInstance = ensureChart(reportRateChartInstance, reportRateChartRef.value);
 		if (!reportRateChartInstance) return;
-		const submitted = todaySubmittedReportsCount.value;
-		const pending = Math.max(scopedEmployees.value.length - submitted, 0);
+		const submitted = overviewTodaySubmittedReportsCount.value;
+		const pending = overviewPendingReportsCount.value;
 		reportRateChartInstance.setOption({
 			animation: false,
 			tooltip: {
@@ -5252,7 +5383,7 @@ function disposeOverviewCharts() {
 
 function buildDateRange(days) {
 	return Array.from({ length: days }, (_, index) => {
-		const targetDate = new Date(normalizeDate(DASHBOARD_TODAY).getTime() - (days - 1 - index) * DAY_MS);
+		const targetDate = new Date(normalizeDate(REPORT_RUNTIME_TODAY).getTime() - (days - 1 - index) * DAY_MS);
 		return formatDate(targetDate);
 	});
 }
@@ -6311,21 +6442,11 @@ function formatShortDate(dateString) {
 	height: 100%;
 }
 
-.project-page,
-.employee-page,
 .report-page {
 	display: flex;
 	flex-direction: column;
 	flex: 1;
 	gap: 14px;
-	min-height: 0;
-	height: 100%;
-}
-
-.settings-page {
-	display: flex;
-	flex-direction: column;
-	flex: 1;
 	min-height: 0;
 }
 
@@ -6477,166 +6598,341 @@ function formatShortDate(dateString) {
 	margin-top: 8px;
 }
 
-.project-filter-card :deep(.el-card__body),
-.employee-filter-card :deep(.el-card__body),
 .report-filter-card :deep(.el-card__body) {
 	padding-top: 18px;
 }
 
-.project-filter-actions,
-.employee-filter-actions,
+.report-filter-card,
+.report-table-card {
+	min-height: auto;
+}
+
+.report-table-card {
+	flex: 1;
+	min-height: 460px;
+}
+
+.report-table-card :deep(.el-card__body) {
+	min-height: 0;
+	gap: 14px;
+}
+
 .report-filter-actions {
 	display: inline-flex;
 	gap: 10px;
 	flex-wrap: wrap;
 }
 
-.project-filter-grid {
-	display: grid;
-	grid-template-columns: minmax(220px, 2fr) repeat(4, minmax(140px, 1fr));
-	gap: 12px;
-}
-
-.employee-filter-grid {
-	display: grid;
-	grid-template-columns: 2fr 1fr 1fr;
-	gap: 12px;
-}
-
 .report-filter-grid {
 	display: grid;
 	grid-template-columns: minmax(220px, 2fr) repeat(3, minmax(160px, 1fr));
 	gap: 12px;
+	align-items: center;
 }
 
-.employee-department-field {
-	display: grid;
-	grid-template-columns: minmax(0, 1fr) auto;
-	gap: 10px;
+.report-filter-grid :deep(.el-input),
+.report-filter-grid :deep(.el-select),
+.report-filter-grid :deep(.el-date-editor) {
 	width: 100%;
 }
 
-.employee-table-card {
-	flex: 1;
-	min-height: 0;
-}
-
-.project-table-card :deep(.el-card__body),
-.employee-table-card :deep(.el-card__body),
-.report-table-card :deep(.el-card__body) {
-	min-height: 0;
-}
-
-.project-table-card,
-.project-table-shell,
-.employee-table-shell,
-.report-table-card,
 .report-table-shell {
 	flex: 1;
-	min-height: 0;
-	height: 100%;
+	min-height: 360px;
+	overflow: hidden;
+	border-radius: 16px;
+	border: 1px solid #dbe7f2;
+	background: #ffffff;
 }
 
-.project-table,
-.employee-table,
 .report-table {
 	width: 100%;
-}
-
-.project-table :deep(.el-table__inner-wrapper),
-.employee-table :deep(.el-table__inner-wrapper),
-.report-table :deep(.el-table__inner-wrapper) {
 	height: 100%;
 }
 
-.project-table :deep(td.el-table__cell),
-.report-table :deep(td.el-table__cell) {
-	padding-top: 15px;
-	padding-bottom: 15px;
+.report-table :deep(.el-table__inner-wrapper::before) {
+	display: none;
 }
 
-.project-table :deep(td.el-table__cell .cell),
-.report-table :deep(td.el-table__cell .cell) {
-	min-height: 28px;
-	line-height: 1.5;
+.report-table :deep(.el-table__header th.el-table__cell) {
+	background: #f6f9fc;
+	color: #334155;
+	font-weight: 700;
 }
 
-.employee-pagination {
+.report-table :deep(.el-table__cell) {
+	padding: 12px 0;
+}
+
+.report-row-actions {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+
+.report-detail-grid {
+	display: grid;
+	grid-template-columns: 1fr;
+	gap: 18px;
+}
+
+.report-detail-panel {
+	padding: 16px 18px;
+	border-radius: 18px;
+	background: #f8fafc;
+	border: 1px solid #e5edf4;
+}
+
+.report-detail-panel__header {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 12px;
+}
+
+.report-detail-panel__title {
+	font-size: 16px;
+	font-weight: 700;
+	color: #0f172a;
+}
+
+.report-detail-panel__meta {
+	margin-top: 6px;
+	font-size: 12px;
+	line-height: 1.7;
+	color: #64748b;
+}
+
+.report-detail-section {
+	padding: 16px 18px;
+	border-radius: 18px;
+	background: #f8fafc;
+	border: 1px solid #e5edf4;
+}
+
+.report-detail-section__header {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
 	gap: 12px;
-	margin-top: 16px;
-	flex-wrap: wrap;
+	margin-bottom: 12px;
 }
 
-.employee-pagination__total {
+.report-detail-section__title {
+	font-size: 16px;
+	font-weight: 700;
+	color: #0f172a;
+}
+
+.report-detail-dialog :deep(.el-dialog) {
+	width: min(920px, calc(100vw - 32px)) !important;
+	max-width: calc(100vw - 32px);
+	max-height: calc(100vh - 8vh);
+	margin-bottom: 0;
+}
+
+.report-detail-dialog :deep(.el-dialog__body) {
+	overflow: hidden;
+	padding-top: 18px;
+	padding-bottom: 18px;
+}
+
+.report-detail-scroll {
+	height: calc(100vh - 220px);
+	max-height: calc(100vh - 220px);
+	padding-right: 8px;
+}
+
+.report-detail-scroll :deep(.el-scrollbar__wrap) {
+	overflow-x: hidden;
+}
+
+.report-detail-grid .report-detail-section :deep(.el-empty) {
+	padding: 0;
+	max-height: 100px;
+	min-height: 100px;
+	overflow: hidden;
+}
+
+.report-detail-grid .report-detail-section :deep(.el-empty__image) {
+	max-width: 72px;
+	max-height: 52px;
+	margin-bottom: 6px;
+}
+
+.report-detail-grid .report-detail-section :deep(.el-empty__description) {
+	margin-top: 0;
+}
+
+.report-detail-grid .report-detail-section :deep(.el-empty__description p) {
+	font-size: 12px;
+	line-height: 1.5;
+}
+
+.report-detail-panel {
+	padding: 22px 24px;
+}
+
+.report-meta-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 14px;
+	margin-top: 18px;
+}
+
+.report-meta-item {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	padding: 16px 18px;
+	border-radius: 18px;
+	background: linear-gradient(180deg, #ffffff 0%, #f8fbfe 100%);
+	border: 1px solid #e4edf5;
+}
+
+.report-meta-item span {
 	font-size: 13px;
+	font-weight: 700;
+	letter-spacing: 0.02em;
 	color: #64748b;
 }
 
-.employee-avatar {
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	width: 40px;
-	height: 40px;
-	border-radius: 14px;
-	background: linear-gradient(135deg, #14b8a6 0%, #38bdf8 100%);
-	color: #ffffff;
-	font-size: 16px;
+.report-meta-item strong {
+	font-size: 17px;
 	font-weight: 700;
+	line-height: 1.6;
+	color: #0f172a;
 }
 
-.employee-row-actions {
-	display: inline-flex;
-	align-items: center;
+.report-project-links {
+	display: flex;
+	flex-wrap: wrap;
 	gap: 8px;
 }
 
-.project-row-actions {
+.report-project-link {
 	display: inline-flex;
 	align-items: center;
+	max-width: 100%;
+	padding: 5px 10px;
+	border: 1px solid #bfdbfe;
+	border-radius: 999px;
+	background: #eff6ff;
+	color: #0369a1;
+	font: inherit;
+	font-size: 13px;
+	font-weight: 700;
+	line-height: 1.5;
+	cursor: pointer;
+	transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+.report-project-link:hover {
+	border-color: #38bdf8;
+	background: #e0f2fe;
+	color: #075985;
+}
+
+.report-reading-grid {
+	display: grid;
+	grid-template-columns: 1fr;
+	gap: 16px;
+	margin-top: 18px;
+}
+
+.report-reading-card {
+	padding: 22px 24px;
+	border-radius: 22px;
+	background: linear-gradient(180deg, #ffffff 0%, #f8fbfe 100%);
+	border: 1px solid #dde8f2;
+	min-height: 100px;
+}
+
+.report-reading-card--primary {
+	min-height: 100px;
+}
+
+.report-reading-card__label {
+	margin-bottom: 14px;
+	font-size: 18px;
+	font-weight: 800;
+	line-height: 1.4;
+	letter-spacing: 0.01em;
+	color: #0f172a;
+}
+
+.report-reading-card__content {
+	font-size: 17px;
+	font-weight: 500;
+	line-height: 2;
+	color: #1e293b;
+	white-space: pre-wrap;
+}
+
+.report-attachment-list {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 10px;
+}
+
+.report-attachment-item {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	min-width: 0;
+	padding: 12px 14px;
+	border: 1px solid #dbe7f2;
+	border-radius: 14px;
+	background: #ffffff;
+	color: #334155;
+	text-align: left;
+	cursor: pointer;
+	transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.report-attachment-item:hover {
+	transform: translateY(-1px);
+	border-color: #93c5fd;
+	box-shadow: 0 12px 24px rgba(14, 165, 233, 0.1);
+}
+
+.report-attachment-item span {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.report-comment-panel {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	padding: 20px 22px;
+	border-radius: 20px;
+	background: linear-gradient(180deg, #ffffff 0%, #f8fbfe 100%);
+	border: 1px solid #e5edf4;
+	margin-top: 10px;
+}
+
+.report-comment-panel__meta {
+	display: flex;
+	align-items: center;
 	flex-wrap: wrap;
-	gap: 4px 8px;
-}
-
-.employee-form-grid {
-	display: grid;
-	grid-template-columns: repeat(2, minmax(0, 1fr));
-	gap: 4px 14px;
-}
-
-.project-form-grid {
-	display: grid;
-	grid-template-columns: repeat(2, minmax(0, 1fr));
-	gap: 4px 14px;
-}
-
-.project-form-grid__full {
-	grid-column: 1 / -1;
-}
-
-.project-upload {
-	width: 100%;
-}
-
-.project-upload :deep(.el-upload) {
-	width: 100%;
-}
-
-.project-upload :deep(.el-upload-dragger) {
-	width: 100%;
-}
-
-.project-upload__tip {
+	gap: 8px 12px;
 	font-size: 12px;
 	line-height: 1.6;
 	color: #64748b;
 }
 
-.employee-form-grid__full {
-	grid-column: 1 / -1;
+.report-comment-panel__content {
+	font-size: 16px;
+	font-weight: 500;
+	line-height: 2;
+	color: #334155;
+	white-space: pre-wrap;
 }
 
 .project-detail-grid {
@@ -6646,7 +6942,6 @@ function formatShortDate(dateString) {
 }
 
 .project-detail-panel,
-.report-detail-panel,
 .project-detail-section {
 	padding: 16px 18px;
 	border-radius: 18px;
@@ -6804,174 +7099,23 @@ function formatShortDate(dateString) {
 	margin-bottom: 16px;
 }
 
-.project-progress-field {
+.report-form-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 6px 16px;
+}
+
+.report-form-grid__full {
+	grid-column: 1 / -1;
+}
+
+.report-form-grid :deep(.el-date-editor),
+.report-form-grid :deep(.el-select),
+.report-form-grid :deep(.el-input),
+.report-form-grid :deep(.el-textarea),
+.report-form-grid :deep(.el-upload),
+.report-form-grid :deep(.el-upload-dragger) {
 	width: 100%;
-	padding-right: 16px;
-	box-sizing: border-box;
-}
-
-.project-progress-field__hint {
-	margin-top: 10px;
-	font-size: 12px;
-	line-height: 1.6;
-	color: #64748b;
-}
-
-.report-detail-grid {
-	display: grid;
-	grid-template-columns: 1fr;
-	gap: 18px;
-}
-
-.report-detail-dialog :deep(.el-dialog) {
-	width: min(920px, calc(100vw - 32px)) !important;
-	max-width: calc(100vw - 32px);
-	max-height: calc(100vh - 8vh);
-	margin-bottom: 0;
-}
-
-.report-detail-dialog :deep(.el-dialog__body) {
-	overflow: hidden;
-	padding-top: 18px;
-	padding-bottom: 18px;
-}
-
-.report-detail-scroll {
-	height: calc(100vh - 220px);
-	max-height: calc(100vh - 220px);
-	padding-right: 8px;
-}
-
-.report-detail-scroll :deep(.el-scrollbar__wrap) {
-	overflow-x: hidden;
-}
-
-.report-detail-grid .project-detail-section :deep(.el-empty) {
-	padding: 0;
-	max-height: 100px;
-	min-height: 100px;
-	overflow: hidden;
-}
-
-.report-detail-grid .project-detail-section :deep(.el-empty__image) {
-	max-width: 72px;
-	max-height: 52px;
-	margin-bottom: 6px;
-}
-
-.report-detail-grid .project-detail-section :deep(.el-empty__description) {
-	margin-top: 0;
-}
-
-.report-detail-grid .project-detail-section :deep(.el-empty__description p) {
-	font-size: 12px;
-	line-height: 1.5;
-}
-
-.report-detail-panel {
-	padding: 22px 24px;
-}
-
-.report-meta-grid {
-	display: grid;
-	grid-template-columns: repeat(2, minmax(0, 1fr));
-	gap: 14px;
-	margin-top: 18px;
-}
-
-.report-meta-item {
-	display: flex;
-	flex-direction: column;
-	gap: 8px;
-	padding: 16px 18px;
-	border-radius: 18px;
-	background: linear-gradient(180deg, #ffffff 0%, #f8fbfe 100%);
-	border: 1px solid #e4edf5;
-}
-
-.report-meta-item span {
-	font-size: 13px;
-	font-weight: 700;
-	letter-spacing: 0.02em;
-	color: #64748b;
-}
-
-.report-meta-item strong {
-	font-size: 17px;
-	font-weight: 700;
-	line-height: 1.6;
-	color: #0f172a;
-}
-
-.report-reading-grid {
-	display: grid;
-	grid-template-columns: 1fr;
-	gap: 16px;
-	margin-top: 18px;
-}
-
-.report-reading-card {
-	padding: 22px 24px;
-	border-radius: 22px;
-	background: linear-gradient(180deg, #ffffff 0%, #f8fbfe 100%);
-	border: 1px solid #dde8f2;
-	min-height: 100px;
-}
-
-.report-reading-card--primary {
-	min-height: 100px;
-}
-
-.report-reading-card__label {
-	margin-bottom: 14px;
-	font-size: 18px;
-	font-weight: 800;
-	line-height: 1.4;
-	letter-spacing: 0.01em;
-	color: #0f172a;
-}
-
-.report-reading-card__content {
-	font-size: 17px;
-	font-weight: 500;
-	line-height: 2;
-	color: #1e293b;
-	white-space: pre-wrap;
-}
-
-.report-attachment-list {
-	display: grid;
-	grid-template-columns: repeat(2, minmax(0, 1fr));
-	gap: 10px;
-}
-
-.report-comment-panel {
-	display: flex;
-	flex-direction: column;
-	gap: 12px;
-	padding: 20px 22px;
-	border-radius: 20px;
-	background: linear-gradient(180deg, #ffffff 0%, #f8fbfe 100%);
-	border: 1px solid #e5edf4;
-	margin-top: 10px;
-}
-
-.report-comment-panel__meta {
-	display: flex;
-	align-items: center;
-	flex-wrap: wrap;
-	gap: 8px 12px;
-	font-size: 12px;
-	line-height: 1.6;
-	color: #64748b;
-}
-
-.report-comment-panel__content {
-	font-size: 16px;
-	font-weight: 500;
-	line-height: 2;
-	color: #334155;
-	white-space: pre-wrap;
 }
 
 .placeholder-panel {
@@ -7001,6 +7145,14 @@ function formatShortDate(dateString) {
 	border-radius: 16px;
 	background: #f8fafc;
 	border: 1px solid #edf2f7;
+}
+.employee-pagination {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	margin-top: 16px;
+	flex-wrap: wrap;
 }
 
 @media (max-width: 1380px) {
@@ -7109,14 +7261,8 @@ function formatShortDate(dateString) {
 
 	.project-filter-grid,
 	.report-filter-grid,
-	.employee-filter-grid,
-	.project-form-grid,
-	.employee-form-grid,
+	.report-form-grid,
 	.settings-form-grid {
-		grid-template-columns: 1fr;
-	}
-
-	.employee-department-field {
 		grid-template-columns: 1fr;
 	}
 
@@ -7176,7 +7322,7 @@ function formatShortDate(dateString) {
 		padding-right: 2px;
 	}
 
-	.project-detail-panel__header,
+	.report-detail-panel__header,
 	.project-timeline__head {
 		flex-direction: column;
 	}

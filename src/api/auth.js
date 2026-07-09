@@ -32,12 +32,15 @@ export function logout(options = {}) {
 export function isTokenValid() {
   const token = localStorage.getItem('accessToken');
   const refreshToken = localStorage.getItem('refreshToken');
+  if (!refreshToken) return false;
+
+  // accessToken / expiresIn 丢失时，仍允许在首个请求中用 refreshToken 恢复会话
+  if (!token) return true;
+
   const expiresIn = localStorage.getItem('expiresIn');
-  
-  if (!token || !refreshToken || !expiresIn) return false;
+  if (!expiresIn) return true;
 
   const now = Math.floor(Date.now() / 1000);
-  // 如果 token 没过期，或者有 refreshToken 可以尝试刷新，就返回 true
   return Number(expiresIn) > now || !!refreshToken;
 }
 

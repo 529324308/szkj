@@ -1,4 +1,7 @@
+import axios from 'axios';
 import { request } from './request';
+
+const API_BASE_URL = 'https://www.zjshuzhi.cn:8090';
 
 /**
  * 管理中心接口封装
@@ -32,18 +35,68 @@ export async function uploadFiles(formData) {
 	});
 }
 
+export async function uploadFilesWithProgress(formData, onUploadProgress) {
+	const accessToken = localStorage.getItem('accessToken');
+	const response = await axios.post(`${API_BASE_URL}/api/PersonalCenter/files`, formData, {
+		headers: {
+			...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+		},
+		onUploadProgress,
+	});
+	return response.data;
+}
+
+function getAuthHeaders() {
+	const accessToken = localStorage.getItem('accessToken');
+	return accessToken ? { Authorization: `Bearer ${accessToken}` } : {};
+}
+
+function parseDownloadFileName(contentDisposition, fallbackName) {
+	const raw = String(contentDisposition || '');
+	const utf8Match = raw.match(/filename\*=UTF-8''([^;]+)/i);
+	if (utf8Match?.[1]) {
+		try {
+			return decodeURIComponent(utf8Match[1]);
+		} catch {
+			return utf8Match[1];
+		}
+	}
+	const normalMatch = raw.match(/filename="?([^";]+)"?/i);
+	return normalMatch?.[1] || fallbackName;
+}
+
+function resolveApiUrl(url) {
+	const normalized = String(url || '').trim();
+	if (!normalized) return '';
+	if (/^https?:\/\//i.test(normalized)) return normalized;
+	return `${API_BASE_URL}${normalized.startsWith('/') ? normalized : `/${normalized}`}`;
+}
+
 /**
  * 下载附件
  * @param {string} fileId - 附件ID
  */
 export function getFileDownloadUrl(fileId) {
-	return `${request.baseURL || ''}/api/PersonalCenter/files/${fileId}/download`;
+	return `${API_BASE_URL}/api/PersonalCenter/files/${fileId}/download`;
 }
 
-// ==================== 首页概览 ====================
+export async function downloadFile(fileId) {
+	const response = await axios.get(`${API_BASE_URL}/api/PersonalCenter/files/${fileId}/download`, {
+		headers: {
+			...getAuthHeaders(),
+		},
+		responseType: 'blob',
+	});
+	return {
+		blob: response.data,
+		fileName: parseDownloadFileName(response.headers?.['content-disposition'], `file-${fileId}`),
+	};
+}
+
+// ==================== 管理中心概览 ====================
 
 /**
- * 获取首页概览数据
+ * 获取管理中心概览数据
  * @param {object} params - { range, trendMode }
  */
 export async function getOverview(params = {}) {
@@ -209,7 +262,20 @@ export async function rejectProject(projectId, data) {
  * @param {string} projectId - 项目ID
  */
 export function getProjectAttachmentsDownloadUrl(projectId) {
-	return `${request.baseURL || ''}/api/PersonalCenter/projects/${projectId}/attachments/download-all`;
+	return `${API_BASE_URL}/api/PersonalCenter/projects/${projectId}/attachments/download-all`;
+}
+
+export async function downloadProjectAttachments(projectId) {
+	const response = await axios.get(`${API_BASE_URL}/api/PersonalCenter/projects/${projectId}/attachments/download-all`, {
+		headers: {
+			...getAuthHeaders(),
+		},
+		responseType: 'blob',
+	});
+	return {
+		blob: response.data,
+		fileName: parseDownloadFileName(response.headers?.['content-disposition'], `project-${projectId}-attachments.zip`),
+	};
 }
 
 // ==================== 日报管理页 ====================
@@ -245,6 +311,12 @@ export async function createReport(data) {
  * 获取可关联项目
  * @param {object} params - { keyword }
  */
+export async function deleteReport(reportId) {
+	return request(`/api/PersonalCenter/reports/delete/${reportId}`, {
+		method: 'DELETE',
+	});
+}
+
 export async function getReportProjectOptions(params = {}) {
 	return request('/api/PersonalCenter/reports/project-options', { params });
 }
@@ -266,7 +338,24 @@ export async function commentReport(reportId, data) {
  * @param {string} reportId - 日报ID
  */
 export function getReportAttachmentsDownloadUrl(reportId) {
-	return `${request.baseURL || ''}/api/PersonalCenter/reports/${reportId}/attachments/download-all`;
+	return `${API_BASE_URL}/api/PersonalCenter/reports/${reportId}/attachments/download-all`;
+}
+
+export async function downloadReportAttachments(reportId) {
+	const response = await axios.get(`${API_BASE_URL}/api/PersonalCenter/reports/${reportId}/attachments/download-all`, {
+		headers: {
+			...getAuthHeaders(),
+		},
+		responseType: 'blob',
+	});
+	return {
+		blob: response.data,
+		fileName: parseDownloadFileName(response.headers?.['content-disposition'], `report-${reportId}-attachments.zip`),
+	};
+}
+
+export function resolveAttachmentUrl(url, fileId) {
+	return resolveApiUrl(url) || getFileDownloadUrl(fileId);
 }
 
 // ==================== 个人设置页 ====================
@@ -290,14 +379,18 @@ export async function updateSettings(data) {
 }
 
 /**
- * 上传/更换头像
- * @param {FormData} formData - 包含 file
+ * 上传/更换头像（使用 2.3 公共上传接口）
+ * @param {File} file - 头像文件
+ * @param {string} userId - 用户ID
  */
-export async function uploadAvatar(formData) {
-	return request('/api/PersonalCenter/settings/avatar', {
+export async function uploadAvatar(file, userId) {
+	const formData = new FormData();
+	formData.append('bizType', 'avatar');
+	formData.append('bizId', userId);
+	formData.append('files', file);
+	return request('/api/PersonalCenter/files', {
 		method: 'POST',
 		body: formData,
-		headers: {}, // 让 request 处理 Content-Type
 	});
 }
 

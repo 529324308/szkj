@@ -350,7 +350,6 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { getOverview } from '@/api/personalCenter';
 
 const props = defineProps({
 	active: Boolean,
@@ -379,11 +378,6 @@ const props = defineProps({
 const emit = defineEmits(['enter-module']);
 const statsExpanded = ref(false);
 const statsToggleLabel = computed(() => (statsExpanded.value ? '收起' : '展开'));
-
-// ==================== 接口数据状态 ====================
-const overviewData = ref(null);
-const overviewLoading = ref(false);
-const overviewError = ref(null);
 
 // 计算属性：从接口数据映射到UI需要的数据格式
 const overviewMetrics = computed(() => {
@@ -596,29 +590,16 @@ const metrics = computed(() => {
 	];
 });
 
-// ==================== 加载概览数据 ====================
-async function loadOverviewData() {
-	overviewLoading.value = true;
-	overviewError.value = null;
-	try {
-		const data = await getOverview({ range: '7d', trendMode: 'new' });
-		if (data) {
-			overviewData.value = data;
-		}
-	} catch (error) {
-		console.error('加载首页概览数据失败:', error);
-		overviewError.value = error.message || '加载失败';
-	} finally {
-		overviewLoading.value = false;
-	}
-}
+// ==================== 概览数据（静态） ====================
+// 注：首页使用静态数据，管理中心概览数据请使用管理中心页面
+const overviewData = ref(null);
 
-// 当 active 变为 true 时重新加载数据
+// 当 active 变为 true 时加载静态数据
 watch(
 	() => props.active,
 	(newActive) => {
 		if (newActive) {
-			loadOverviewData();
+			overviewData.value = null; // 使用 computed 中的静态默认值
 		}
 	},
 	{ immediate: true }
