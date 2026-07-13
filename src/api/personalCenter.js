@@ -357,6 +357,15 @@ export async function downloadReportAttachments(reportId) {
 export function resolveAttachmentUrl(url, fileId) {
 	return resolveApiUrl(url) || getFileDownloadUrl(fileId);
 }
+export async function getRealtimeToken() {
+	return request('/api/PersonalCenter/realtime/token');
+}
+
+export async function markNotificationRead(notificationId) {
+	return request(`/api/PersonalCenter/notifications/${notificationId}/read`, {
+		method: 'POST',
+	});
+}
 
 // ==================== 个人设置页 ====================
 

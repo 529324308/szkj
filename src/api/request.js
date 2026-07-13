@@ -4,7 +4,7 @@ import { clearLogoutState } from '../utils/appStorage';
  * 基础请求封装
  */
 
-const BASE_URL = 'https://www.zjshuzhi.cn:8090';
+export const BASE_URL = 'https://www.zjshuzhi.cn:8090';
 
 const ERROR_CODE_MESSAGES = {
   0: null,
@@ -50,7 +50,7 @@ function isRefreshTokenRequest(url) {
 let isRefreshing = false;
 let refreshPromise = null;
 
-async function refreshAccessToken() {
+export async function refreshAccessToken() {
   const accessToken = localStorage.getItem('accessToken');
   const refreshToken = localStorage.getItem('refreshToken');
 

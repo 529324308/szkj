@@ -42,6 +42,7 @@
 
 <script setup>
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { ElNotification } from 'element-plus';
 import CesiumMap from './components/CesiumMap.vue';
 import OpenLayersMap from './components/OpenLayersMap.vue';
 import LoadingPage from './components/LoadingPage.vue';
@@ -50,6 +51,7 @@ import Login from './components/Login.vue';
 import PwaInstallButton from './components/PwaInstallButton.vue';
 import PwaInstallGuideOverlay from './components/PwaInstallGuideOverlay.vue';
 import { usePwaInstall } from './composables/usePwaInstall';
+import { connectChatSocket, disconnectChatSocket, useChatWebSocket } from './composables/useChatWebSocket';
 import { isTokenValid, logout } from './api/auth';
 import { forceFreshReload } from './utils/appStorage';
 import { buildConservativeRenderPreset, resolveRecommendedMapEngine } from './utils/deviceProfile';
@@ -72,8 +74,10 @@ const welcomeVisible = ref(false);
 const welcomeCompleted = ref(false);
 const installGuideVisible = ref(false);
 const hasShownInstallGuideForEntry = ref(false);
+const lastNotifiedReminderKey = ref('');
 let welcomeDelayTimer = null;
 const { isStandaloneApp } = usePwaInstall();
+const { latestReportReminder } = useChatWebSocket();
 
 onMounted(() => {
   if (isTokenValid()) {
@@ -87,6 +91,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   clearWelcomeDelayTimer();
+  disconnectChatSocket();
 });
 
 function startLoadingFlow() {
@@ -294,6 +299,34 @@ watch(isStandaloneApp, (standalone) => {
     installGuideVisible.value = false;
   }
 });
+
+watch(loggedIn, (nextLoggedIn) => {
+  if (nextLoggedIn) {
+    connectChatSocket().catch(() => {});
+    return;
+  }
+
+  lastNotifiedReminderKey.value = '';
+  disconnectChatSocket({ clearMessages: true });
+}, { immediate: true });
+
+watch(
+  () => latestReportReminder.value?.__key || '',
+  (nextKey) => {
+    if (!loggedIn.value || !nextKey || nextKey === lastNotifiedReminderKey.value) return;
+
+    const reminder = latestReportReminder.value;
+    lastNotifiedReminderKey.value = nextKey;
+    if (!reminder || reminder.IsRead) return;
+
+    ElNotification({
+      title: '日报未提交提醒',
+      message: reminder.Message || '您有新的管理中心通知，请及时处理。',
+      type: 'warning',
+      duration: 5000,
+    });
+  },
+);
 </script>
 
 <style scoped>

@@ -397,7 +397,7 @@
 							</div>
 							<div v-if="hasPublicCollection(message)" class="public-collection-result">
 								<div class="template-title">{{ getPublicCollectionTitle(message.publicCollection) }}</div>
-								<div class="public-collection-summary">{{ message.publicCollection.message || getPublicCollectionStatusText(message.publicCollection) }}</div>
+								<div class="public-collection-summary">{{ toChineseVisibleText(message.publicCollection.message || getPublicCollectionStatusText(message.publicCollection)) }}</div>
 								<div class="public-collection-meta">
 									<span v-if="message.publicCollection.crawlJobId">爬取任务 {{ message.publicCollection.crawlJobId }}</span>
 									<span v-if="message.publicCollection.parseRunId">解析任务 {{ message.publicCollection.parseRunId }}</span>
@@ -743,8 +743,8 @@
 									aria-label="GraphRAG 查询模式"
 								>
 									<option value="auto">自动</option>
-									<option value="local">Local Search</option>
-									<option value="global">Global Search</option>
+									<option value="local">本地检索</option>
+									<option value="global">全局检索</option>
 								</select>
 								<select
 									v-if="false"
@@ -807,7 +807,7 @@
 					</div>
 
 					<div class="composer-tip">
-						当前使用 GraphRAG / Neo4j 知识图谱后端，支持 Local / Global Search、图谱引用和原文预览。
+						当前使用 GraphRAG / Neo4j 知识图谱后端，支持本地检索、全局检索、图谱引用和原文预览。
 					</div>
 				</div>
 			</div>
@@ -1000,8 +1000,6 @@ const statusText = ref('正在连接知识库智能体...');
 const statusTone = ref('neutral');
 const userError = ref('');
 const loadingModels = ref(false);
-const isLoading = ref(false);
-const activeAssistantMessageId = ref(null);
 const messages = ref([]);
 const chatMode = ref('chat');
 const graphQueryMode = ref('auto');
@@ -1029,8 +1027,8 @@ const isMobileView = ref(false);
 const viewportSize = ref(getViewportSize());
 let resizeObserver = null;
 let scrollSyncTimer = null;
-let activeRequestController = null;
-let activeDurationTimer = null;
+const activeRequestsByChat = new Map();
+const activeRequestRevision = ref(0);
 let chatSyncTimer = null;
 let loadingChatSessions = false;
 
@@ -1049,10 +1047,17 @@ watch(templateFiles, () => {
 });
 
 const visibleMessages = computed(() => messages.value);
+const activeChatKey = computed(() => currentChatId.value || draftChatId.value || '');
+const activeRequestState = computed(() => {
+	activeRequestRevision.value;
+	return activeRequestsByChat.get(activeChatKey.value) || null;
+});
+const isLoading = computed(() => Boolean(activeRequestState.value));
+const activeAssistantMessageId = computed(() => activeRequestState.value?.assistantMessageId || null);
 const canSend = computed(() => (Boolean(draft.value.trim()) || templateFiles.value.length > 0) && !isLoading.value);
 const showModelPicker = computed(() => import.meta.env.DEV && availableModels.value.length > 1);
-const currentModelLabel = computed(() => selectedModel.value || '未选择模型');
-const noticeText = computed(() => userError.value || statusText.value);
+const currentModelLabel = computed(() => 'AI 智能分析');
+const noticeText = computed(() => toChineseVisibleText(userError.value || statusText.value));
 const noticeTone = computed(() => (userError.value ? 'warning' : statusTone.value));
 const tokenUsage = computed(() => {
 	const fileText = templateFiles.value
@@ -1256,10 +1261,38 @@ async function showContextCompressionNoticeIfNeeded(assistantMessage = null, sig
 	return true;
 }
 
-function clearAssistantDurationTimer() {
-	if (activeDurationTimer) {
-		window.clearInterval(activeDurationTimer);
-		activeDurationTimer = null;
+function bumpActiveRequestRevision() {
+	activeRequestRevision.value += 1;
+}
+
+function getActiveRequestForChat(chatId = activeChatKey.value) {
+	return activeRequestsByChat.get(chatId || '') || null;
+}
+
+function setActiveRequestForChat(chatId, state = {}) {
+	if (!chatId) return;
+	activeRequestsByChat.set(chatId, state);
+	bumpActiveRequestRevision();
+}
+
+function clearActiveRequestForChat(chatId, controller = null) {
+	if (!chatId) return;
+	const current = activeRequestsByChat.get(chatId);
+	if (!current) return;
+	if (controller && current.controller !== controller) return;
+	if (current.timer) {
+		window.clearInterval(current.timer);
+	}
+	activeRequestsByChat.delete(chatId);
+	bumpActiveRequestRevision();
+}
+
+function clearAssistantDurationTimer(chatId = activeChatKey.value) {
+	const current = getActiveRequestForChat(chatId);
+	if (current?.timer) {
+		window.clearInterval(current.timer);
+		current.timer = null;
+		bumpActiveRequestRevision();
 	}
 }
 
@@ -1268,26 +1301,32 @@ function updateAssistantDuration(message, nowMs = Date.now()) {
 	message.durationMs = Math.max(1, nowMs - Number(message.requestStartedAtMs));
 }
 
-function startAssistantDurationTimer(message, startedAtMs = Date.now()) {
-	clearAssistantDurationTimer();
+function startAssistantDurationTimer(message, startedAtMs = Date.now(), chatId = activeChatKey.value) {
+	clearAssistantDurationTimer(chatId);
 	if (!message) return;
 	message.requestStartedAtMs = Number(startedAtMs) || Date.now();
 	message.startedAt = message.startedAt || new Date(message.requestStartedAtMs).toISOString();
 	message.completedAt = '';
 	updateAssistantDuration(message);
-	messages.value = [...messages.value];
-	activeDurationTimer = window.setInterval(() => {
-		if (!message || message.id !== activeAssistantMessageId.value || !isLoading.value) {
-			clearAssistantDurationTimer();
+	refreshVisibleMessagesForChat(chatId);
+	const timer = window.setInterval(() => {
+		const current = getActiveRequestForChat(chatId);
+		if (!message || current?.assistantMessageId !== message.id) {
+			clearAssistantDurationTimer(chatId);
 			return;
 		}
 		updateAssistantDuration(message);
-		messages.value = [...messages.value];
+		syncMessageToChat(chatId, message);
 	}, 1000);
+	const current = getActiveRequestForChat(chatId);
+	if (current) {
+		current.timer = timer;
+		bumpActiveRequestRevision();
+	}
 }
 
-function finalizeAssistantDuration(message, completedAtMs = Date.now()) {
-	clearAssistantDurationTimer();
+function finalizeAssistantDuration(message, completedAtMs = Date.now(), chatId = activeChatKey.value) {
+	clearAssistantDurationTimer(chatId);
 	if (!message) return;
 	if (message.requestStartedAtMs) {
 		updateAssistantDuration(message, completedAtMs);
@@ -1333,8 +1372,7 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
-	stopCurrentResponse();
-	clearAssistantDurationTimer();
+	stopAllResponses();
 	if (resizeObserver) {
 		resizeObserver.disconnect();
 		resizeObserver = null;
@@ -1463,7 +1501,7 @@ function scheduleScrollToBottom() {
 function applySelectedModel() {
 	localStorage.setItem(MODEL_STORAGE_KEY, selectedModel.value);
 	userError.value = '';
-	statusText.value = `已切换到 ${selectedModel.value}`;
+	statusText.value = '已切换处理方式';
 	statusTone.value = 'success';
 }
 
@@ -1545,6 +1583,39 @@ function saveChatList(list) {
 		localStorage.removeItem(CHAT_LIST_STORAGE_KEY);
 	} else {
 		localStorage.setItem(CHAT_LIST_STORAGE_KEY, JSON.stringify(list));
+	}
+}
+
+function refreshVisibleMessagesForChat(chatId) {
+	if (!chatId || currentChatId.value !== chatId) return;
+	const chat = chatHistoryList.value.find((item) => item.id === chatId);
+	if (!chat) return;
+	messages.value = Array.isArray(chat.messages) ? [...chat.messages] : [];
+}
+
+function syncMessageToChat(chatId, message) {
+	if (!chatId || !message) return;
+	const chat = chatHistoryList.value.find((item) => item.id === chatId);
+	if (!chat) return;
+	const nextMessage = attachMessageTokenUsage({ ...message });
+	const list = Array.isArray(chat.messages) ? [...chat.messages] : [];
+	const index = list.findIndex((item) => item.id === nextMessage.id);
+	if (index >= 0) {
+		list[index] = nextMessage;
+	} else {
+		list.push(nextMessage);
+	}
+	chat.messages = list;
+	chat.updatedAt = getLastAssistantReplyTime(list) || chat.updatedAt || new Date().toISOString();
+	chat.lastMessageAt = chat.updatedAt || chat.lastMessageAt || new Date().toISOString();
+	chat.anchorDocuments = buildAnchorDocumentsFromMessages(list);
+	chat.uploadedDocuments = buildAnchorDocumentsFromMessages(list);
+	chat.tokenUsage = buildSessionTokenUsage(list);
+	saveChatList(chatHistoryList.value);
+	schedulePersistChatToServer(chat);
+	if (currentChatId.value === chatId) {
+		messages.value = [...list];
+		scheduleScrollToBottom();
 	}
 }
 
@@ -1700,11 +1771,9 @@ function extractRecentUploadedDocumentIdsFromFileAnalysisResult(result = {}, cou
 }
 
 function enterDraftChat() {
-	clearAssistantDurationTimer();
 	currentChatId.value = null;
 	draftChatId.value = createSessionId();
 	messages.value = [];
-	activeAssistantMessageId.value = null;
 	draft.value = '';
 	userError.value = '';
 	statusText.value = '已创建新的空白对话';
@@ -1759,13 +1828,11 @@ function createNewChat() {
 function switchToChat(chatId) {
 	const chat = chatHistoryList.value.find((c) => c.id === chatId);
 	if (!chat) return;
-	clearAssistantDurationTimer();
 	currentChatId.value = chatId;
 	draftChatId.value = null;
 	localStorage.setItem(CURRENT_CHAT_ID_KEY, chatId);
 	messages.value = chat.messages ? [...chat.messages] : [];
 	syncLastFileAnalysisRequestForActiveChat();
-	activeAssistantMessageId.value = null;
 	draft.value = '';
 	userError.value = '';
 	statusText.value = `已加载对话: ${chat.title || '未命名'}`;
@@ -1879,6 +1946,8 @@ async function sendDraft() {
 	if (!currentChatId.value) {
 		persistDraftChat();
 	}
+	const requestChatId = currentChatId.value || draftChatId.value || createSessionId();
+	if (getActiveRequestForChat(requestChatId)) return;
 
 	const userMessage = createMessage('user', displayText, undefined, undefined, {
 		files: sentFiles
@@ -1903,17 +1972,35 @@ async function sendDraft() {
 		fileInputRef.value.value = '';
 	}
 	userError.value = '';
-	isLoading.value = true;
-	activeAssistantMessageId.value = assistantMessage.id;
-	activeRequestController = requestController;
+	setActiveRequestForChat(requestChatId, {
+		controller: requestController,
+		assistantMessageId: assistantMessage.id,
+		startedAtMs: requestStartedAt,
+		timer: null
+	});
 	messages.value = [...messages.value, userMessage, assistantMessage];
-	startAssistantDurationTimer(assistantMessage, requestStartedAt);
+	const requestMessages = [...messages.value];
+	syncMessageToChat(requestChatId, userMessage);
+	syncMessageToChat(requestChatId, assistantMessage);
+	startAssistantDurationTimer(assistantMessage, requestStartedAt, requestChatId);
+
+	const applyStreamEventForRequest = (event) => {
+		applyKnowledgeStreamEvent(assistantMessage, event);
+		syncMessageToChat(requestChatId, assistantMessage);
+	};
+	const applyResultForRequest = (payload, options = { collapseProcess: true }) => {
+		applyKnowledgeChatResult(assistantMessage, payload, options);
+		syncMessageToChat(requestChatId, assistantMessage);
+	};
 
 	try {
 		let result;
 		let turnUnderstanding = null;
 		try {
-			const understood = await understandCurrentTurn(text, filesForRequest, assistantMessage, requestController.signal);
+			const understood = await understandCurrentTurn(text, filesForRequest, assistantMessage, requestController.signal, {
+				chatId: requestChatId,
+				messages: requestMessages
+			});
 			turnUnderstanding = understood.understanding || null;
 		} catch (error) {
 			if (requestController.signal.aborted || error?.name === 'AbortError') {
@@ -1938,13 +2025,13 @@ async function sendDraft() {
 				instruction,
 				topK: 4,
 				userId: getCurrentUserId(),
-				convId: currentChatId.value || draftChatId.value || createSessionId(),
+				convId: requestChatId,
 				files: lastRequest.documentIds?.length ? [] : (lastRequest.files || []),
 				documentIds: lastRequest.documentIds || []
 			}, {
-				onStatus: (event) => applyKnowledgeStreamEvent(assistantMessage, event),
-				onProgress: (event) => applyKnowledgeStreamEvent(assistantMessage, event),
-				onResult: (payload) => applyKnowledgeChatResult(assistantMessage, payload, { collapseProcess: true })
+				onStatus: applyStreamEventForRequest,
+				onProgress: applyStreamEventForRequest,
+				onResult: (payload) => applyResultForRequest(payload)
 			}, { signal: requestController.signal });
 			const documentIds = lastRequest.documentIds?.length
 				? lastRequest.documentIds
@@ -2004,13 +2091,13 @@ async function sendDraft() {
 				instruction: analysisPlan.instruction,
 				topK: 4,
 				userId: getCurrentUserId(),
-				convId: currentChatId.value || draftChatId.value || createSessionId(),
+				convId: requestChatId,
 				files: analysisPlan.files,
 				documentIds: analysisPlan.documentIds || []
 			}, {
-				onStatus: (event) => applyKnowledgeStreamEvent(assistantMessage, event),
-				onProgress: (event) => applyKnowledgeStreamEvent(assistantMessage, event),
-				onResult: (payload) => applyKnowledgeChatResult(assistantMessage, payload, { collapseProcess: true })
+				onStatus: applyStreamEventForRequest,
+				onProgress: applyStreamEventForRequest,
+				onResult: (payload) => applyResultForRequest(payload)
 			}, { signal: requestController.signal });
 			const documentIds = extractRecentUploadedDocumentIdsFromFileAnalysisResult(result, analysisPlan.files?.length || filesForRequest.length);
 			if (documentIds.length > 0) {
@@ -2022,7 +2109,7 @@ async function sendDraft() {
 			}
 		} else {
 			await showContextCompressionNoticeIfNeeded(assistantMessage, requestController.signal);
-			const conversationContext = buildConversationContext();
+			const conversationContext = buildConversationContextFromMessages(requestMessages);
 			result = await chatWithKnowledgeStream({
 				question: text,
 				messages: conversationContext,
@@ -2031,22 +2118,22 @@ async function sendDraft() {
 				useOpenClaw: true,
 				openClawProvider: openClawProvider.value,
 				userId: localStorage.getItem('userName') || 'local-user',
-				convId: currentChatId.value || draftChatId.value || createSessionId(),
+				convId: requestChatId,
 				topK: 6
 			}, {
-				onStatus: (event) => applyKnowledgeStreamEvent(assistantMessage, event),
-				onProgress: (event) => applyKnowledgeStreamEvent(assistantMessage, event),
-				onReconnect: (event) => applyKnowledgeStreamEvent(assistantMessage, event)
+				onStatus: applyStreamEventForRequest,
+				onProgress: applyStreamEventForRequest,
+				onReconnect: applyStreamEventForRequest
 			}, { signal: requestController.signal, maxReconnectAttempts: 5, inactivityTimeoutMs: 120000 });
 		}
 
 		await waitForMinimumAnswerDelay(requestStartedAt, minimumAnswerDelayMs, requestController.signal);
-		applyKnowledgeChatResult(assistantMessage, result, { collapseProcess: true });
+		applyResultForRequest(result, { collapseProcess: true });
 		ensureAssistantMessageHasVisibleResult(assistantMessage);
 		assistantMessage.timestamp = new Date().toISOString();
 		assistantMessage.isThinking = false;
 		assistantMessage.thinkingCollapsed = true;
-		finalizeAssistantDuration(assistantMessage);
+		finalizeAssistantDuration(assistantMessage, Date.now(), requestChatId);
 		if (chatMode.value === 'replicate' || chatMode.value === 'archive') {
 			templateFiles.value = [];
 			uploadPanelVisible.value = false;
@@ -2054,7 +2141,7 @@ async function sendDraft() {
 				fileInputRef.value.value = '';
 			}
 		}
-		messages.value = [...messages.value];
+		syncMessageToChat(requestChatId, assistantMessage);
 		contextCompressionVisible.value = false;
 	} catch (error) {
 		contextCompressionVisible.value = false;
@@ -2064,33 +2151,32 @@ async function sendDraft() {
 			assistantMessage.isThinking = false;
 			assistantMessage.thinkingCollapsed = true;
 			assistantMessage.processCollapsed = true;
-			finalizeAssistantDuration(assistantMessage);
-			messages.value = [...messages.value];
+			finalizeAssistantDuration(assistantMessage, Date.now(), requestChatId);
+			syncMessageToChat(requestChatId, assistantMessage);
 			return;
 		}
-		assistantMessage.content = assistantMessage.content || (error?.message || '本次请求已中断，未返回可展示结果。');
+		assistantMessage.content = assistantMessage.content || (toChineseVisibleText(error?.message) || '本次请求已中断，未返回可展示结果。');
 		assistantMessage.timestamp = new Date().toISOString();
 		assistantMessage.isThinking = false;
 		assistantMessage.thinkingCollapsed = true;
 		assistantMessage.processCollapsed = false;
-		finalizeAssistantDuration(assistantMessage);
-		messages.value = [...messages.value];
-		userError.value = error?.message || CONNECTION_ERROR_TEXT;
+		finalizeAssistantDuration(assistantMessage, Date.now(), requestChatId);
+		syncMessageToChat(requestChatId, assistantMessage);
+		userError.value = toChineseVisibleText(error?.message || CONNECTION_ERROR_TEXT);
 		statusText.value = error?.message ? '知识库请求失败' : '本地模型暂不可用';
 		statusTone.value = 'warning';
 	} finally {
-		if (activeRequestController === requestController) {
-			activeRequestController = null;
-			isLoading.value = false;
-			activeAssistantMessageId.value = null;
-		}
+		clearActiveRequestForChat(requestChatId, requestController);
 		assistantMessage.isThinking = false;
+		syncMessageToChat(requestChatId, assistantMessage);
 	}
 }
 
 function stopCurrentResponse() {
-	if (activeRequestController) {
-		activeRequestController.abort();
+	const chatId = activeChatKey.value;
+	const activeRequest = getActiveRequestForChat(chatId);
+	if (activeRequest?.controller) {
+		activeRequest.controller.abort();
 	}
 
 	const assistantMessage = messages.value.find((message) => message.id === activeAssistantMessageId.value);
@@ -2100,14 +2186,22 @@ function stopCurrentResponse() {
 		assistantMessage.thinkingCollapsed = true;
 		assistantMessage.processCollapsed = true;
 		assistantMessage.timestamp = new Date().toISOString();
-		finalizeAssistantDuration(assistantMessage);
-		messages.value = [...messages.value];
+		finalizeAssistantDuration(assistantMessage, Date.now(), chatId);
+		syncMessageToChat(chatId, assistantMessage);
 	}
 
-	clearAssistantDurationTimer();
-	activeRequestController = null;
-	isLoading.value = false;
-	activeAssistantMessageId.value = null;
+	clearActiveRequestForChat(chatId);
+}
+
+function stopAllResponses() {
+	for (const [chatId, request] of activeRequestsByChat.entries()) {
+		request.controller?.abort?.();
+		if (request.timer) {
+			window.clearInterval(request.timer);
+		}
+		activeRequestsByChat.delete(chatId);
+	}
+	bumpActiveRequestRevision();
 }
 
 function waitForMinimumAnswerDelay(startedAt = Date.now(), minimumMs = 0, signal = null) {
@@ -2247,12 +2341,14 @@ function buildCurrentFileMetas(files = []) {
 	}));
 }
 
-async function understandCurrentTurn(text = '', filesForRequest = [], assistantMessage = null, signal = null) {
+async function understandCurrentTurn(text = '', filesForRequest = [], assistantMessage = null, signal = null, options = {}) {
+	const chatId = options.chatId || currentChatId.value || draftChatId.value || createSessionId();
+	const contextMessages = Array.isArray(options.messages) ? options.messages : messages.value;
 	const result = await understandKnowledgeTurn({
 		question: text,
-		messages: buildConversationContext(8),
+		messages: buildConversationContextFromMessages(contextMessages, 8),
 		userId: getCurrentUserId(),
-		convId: currentChatId.value || draftChatId.value || createSessionId(),
+		convId: chatId,
 		currentFiles: buildCurrentFileMetas(filesForRequest)
 	}, { signal });
 	const understanding = result?.conversationUnderstanding || null;
@@ -2266,6 +2362,7 @@ async function understandCurrentTurn(text = '', filesForRequest = [], assistantM
 			targetFiles: Array.isArray(understanding.targetFiles) ? understanding.targetFiles : [],
 			uploadedDocumentCount: Number(understanding.state?.uploadedDocumentCount) || 0
 		});
+		syncMessageToChat(chatId, assistantMessage);
 	}
 	return {
 		understanding,
@@ -2370,9 +2467,9 @@ async function buildCurrentFileAnalysisPlan(instruction, currentFiles = [], prev
 	};
 }
 
-function buildConversationContext(limit = 8) {
-	const normalized = buildNormalizedConversationMessages(messages.value);
-	const compression = getConversationCompressionState(messages.value, normalized);
+function buildConversationContextFromMessages(messageList = messages.value, limit = 8) {
+	const normalized = buildNormalizedConversationMessages(messageList);
+	const compression = getConversationCompressionState(messageList, normalized);
 	if (!compression.shouldCompress) {
 		return normalized.slice(-limit);
 	}
@@ -2380,9 +2477,84 @@ function buildConversationContext(limit = 8) {
 	return buildCompressedConversationContext(normalized);
 }
 
+function buildConversationContext(limit = 8) {
+	return buildConversationContextFromMessages(messages.value, limit);
+}
+
 function clipContextSummaryText(value = '', maxLength = 220) {
 	const text = String(value || '').replace(/\s+/g, ' ').trim();
 	return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
+}
+
+function sanitizeVisibleModelText(value = '') {
+	return String(value || '')
+		.replace(/\bqwen[\w.:-]+(?:_[\w.-]+)?\b/gi, 'AI')
+		.replace(/\bllama[\w.:-]+(?:_[\w.-]+)?\b/gi, 'AI')
+		.replace(/\bbge-m3(?::[\w.-]+)?\b/gi, 'AI')
+		.replace(/\bdeepseek[\w.:-]+(?:_[\w.-]+)?\b/gi, 'AI')
+		.replace(/\bvuemaster(?::[\w.-]+)?\b/gi, 'AI');
+}
+
+function toChineseVisibleText(value = '') {
+	const raw = sanitizeVisibleModelText(value);
+	if (!raw) return '';
+	const exact = {
+		'Task profiled': '已识别任务类型',
+		'Model selected': '已选择处理方式',
+		'Query routed': '已完成问题路由',
+		'Conversation understood': '已理解对话意图',
+		'Use ordinary chat model': '使用普通对话处理',
+		'Using ordinary chat model': '使用普通对话处理',
+		'Check local knowledge': '检查本地知识库',
+		'Checking local knowledge index': '检查本地知识库',
+		'Fast knowledge answered': '本地知识库已回答',
+		'Fast knowledge missed': '本地知识库未直接命中',
+		'Use knowledge context': '使用知识库上下文',
+		'Connected to OpenClaw Gateway': '已连接 OpenClaw 网关',
+		'Connect to OpenClaw Gateway': '连接 OpenClaw 网关',
+		'OpenClaw connection error': 'OpenClaw 连接异常',
+		'OpenClaw connection closed': 'OpenClaw 连接已关闭',
+		'OpenClaw session ready': 'OpenClaw 会话已就绪',
+		'Create OpenClaw session': '创建 OpenClaw 会话',
+		'Send message to OpenClaw': '发送问题到 OpenClaw',
+		'Waiting for OpenClaw messages.': '正在等待 OpenClaw 返回消息。',
+		'Listening for OpenClaw assistant and tool events.': '正在接收 OpenClaw 的回答和工具事件。',
+		'OpenClaw gateway connected.': 'OpenClaw 网关已连接。',
+		'OpenClaw session prepared.': 'OpenClaw 会话已准备好。',
+		'Search local knowledge index': '检索本地知识库',
+		'Collect knowledge context': '收集知识库上下文',
+		'Generate answer': '生成回答',
+		'Compose grounded answer': '整理有依据的回答',
+		'Route query': '判断问题路由',
+		'backend message relay': '后端消息转发',
+		'Reconnecting...': '正在重新连接...',
+		'Model service request timed out.': '模型服务请求超时。',
+		'OpenClaw stream failed.': 'OpenClaw 流式响应失败。',
+		'The last user message is empty.': '最后一条用户消息为空。',
+		'question or messages is required.': '请先输入问题或消息。',
+		'No uploaded file content is available.': '没有可用的上传文件内容。',
+		'No parsed text is available for this uploaded file.': '该上传文件暂无可用解析文本。'
+	};
+	if (exact[raw]) return exact[raw];
+	return raw
+		.replace(/Model service request timed out after (\d+) ms\.?/gi, '模型服务请求超时（$1 毫秒）。')
+		.replace(/Model service request failed: HTTP (\d+)/gi, '模型服务请求失败，HTTP 状态码 $1')
+		.replace(/connect ECONNREFUSED ([\d.:]+)/gi, '连接被拒绝：$1')
+		.replace(/Prepared (\d+) knowledge source\(s\)/gi, '已准备 $1 条知识库来源')
+		.replace(/Matched (\d+) knowledge source\(s\)/gi, '命中 $1 条知识库来源')
+		.replace(/Answered from (\d+) local source\(s\)\.?/gi, '已基于 $1 条本地来源生成回答。')
+		.replace(/session ([\w.-]+)/gi, '会话 $1')
+		.replace(/model AI/gi, 'AI')
+		.replace(/Failed to fetch/gi, '网络请求失败')
+		.replace(/NetworkError/gi, '网络错误')
+		.replace(/AbortError/gi, '请求已取消')
+		.replace(/timeout/gi, '超时')
+		.replace(/failed/gi, '失败')
+		.replace(/error/gi, '错误')
+		.replace(/warning/gi, '警告')
+		.replace(/running/gi, '进行中')
+		.replace(/completed/gi, '已完成')
+		.replace(/pending/gi, '等待中');
 }
 
 function onComposerKeydown(event) {
@@ -2410,7 +2582,7 @@ function createMessage(role, content, id, timestamp, extra = {}) {
 		graphSummary: extra.graphSummary || '',
 		indexJobId: extra.indexJobId || '',
 		contextText: extra.contextText || '',
-		model: extra.model || '',
+		model: '',
 		openClaw: extra.openClaw || null,
 		agentTrace: extra.agentTrace || null,
 		memoryContext: extra.memoryContext || null,
@@ -2469,7 +2641,7 @@ function applyKnowledgeChatResult(message, result = {}, options = {}) {
 	message.graphSummary = result?.graphSummary || '';
 	message.indexJobId = result?.indexJobId || '';
 	message.contextText = result?.contextText || '';
-	message.model = result?.model || selectedModel.value;
+	message.model = '';
 	message.openClaw = result?.openClaw || null;
 	message.agentTrace = result?.agentTrace || null;
 	message.memoryContext = result?.memoryContext || null;
@@ -2516,9 +2688,7 @@ function applyKnowledgeStreamEvent(message, event = {}) {
 		} else if (typeof event.content === 'string') {
 			message.content = event.content;
 		}
-		if (event.model) {
-			message.model = event.model;
-		}
+		message.model = '';
 		message.timestamp = new Date().toISOString();
 		messages.value = [...messages.value];
 		scrollToBottom();
@@ -2532,9 +2702,7 @@ function applyKnowledgeStreamEvent(message, event = {}) {
 		} else if (typeof event.thinking === 'string') {
 			message.thinking = event.thinking;
 		}
-		if (event.model) {
-			message.model = event.model;
-		}
+		message.model = '';
 		message.timestamp = new Date().toISOString();
 		messages.value = [...messages.value];
 		scrollToBottom();
@@ -2553,9 +2721,7 @@ function applyKnowledgeStreamEvent(message, event = {}) {
 		if (content) {
 			message.content = content;
 		}
-		if (event.message.model) {
-			message.model = event.message.model;
-		}
+		message.model = '';
 		message.timestamp = new Date().toISOString();
 		messages.value = [...messages.value];
 		return;
@@ -2675,10 +2841,10 @@ function buildTimelineStepFromStreamEvent(event = {}) {
 	return {
 		id,
 		type: event.type || event.stage || 'status',
-		title: getStreamEventTitle(event) || event.title || formatStreamEventType(type),
+		title: toChineseVisibleText(getStreamEventTitle(event) || event.title || formatStreamEventType(type)),
 		status: mapStreamEventStatus(type),
-		detail: event.message || event.detail || event.reason || '',
-		toolName: event.plan?.toolName || event.toolName || ''
+		detail: toChineseVisibleText(event.message || event.detail || event.reason || ''),
+		toolName: toChineseVisibleText(event.plan?.toolName || event.toolName || '')
 	};
 }
 
@@ -2686,15 +2852,15 @@ function normalizeStreamExecutionStep(event = {}, rawStep = {}) {
 	const eventType = String(event.type || event.stage || '').trim();
 	const id = rawStep.id || event.id || eventType || createMessageId();
 	const status = rawStep.status || inferStreamStepStatus(eventType);
-	const title = rawStep.title || event.title || getOpenClawStepTitle(id, rawStep.type || eventType);
+	const title = toChineseVisibleText(rawStep.title || event.title || getOpenClawStepTitle(id, rawStep.type || eventType));
 	return {
 		...rawStep,
 		id,
 		type: rawStep.type || eventType || 'execution_step',
 		title,
 		status,
-		detail: rawStep.detail || rawStep.message || event.message || event.detail || '',
-		toolName: rawStep.toolName || event.toolName || getOpenClawToolName(id, rawStep.type || eventType),
+		detail: toChineseVisibleText(rawStep.detail || rawStep.message || event.message || event.detail || ''),
+		toolName: toChineseVisibleText(rawStep.toolName || event.toolName || getOpenClawToolName(id, rawStep.type || eventType)),
 		sourceEventType: eventType
 	};
 }
@@ -2782,18 +2948,23 @@ function getStreamEventTitle(event = {}) {
 		file_followup_route: '判断问题归属',
 		file_followup_routed: '完成问题归属判断',
 		conversation_understood: '理解对话对象',
-		query_routed: 'Route query',
-		ordinary_chat: 'Use ordinary chat model',
-		fast_knowledge_check: 'Check local knowledge',
-		fast_knowledge_answered: 'Fast knowledge answered',
-		fast_knowledge_miss: 'Fast knowledge missed',
-		knowledge_context_answer: 'Use knowledge context',
+		task_profiled: '识别任务类型',
+		model_selected: '选择处理方式',
+		query_routed: '完成问题路由',
+		ordinary_chat: '使用普通对话处理',
+		fast_knowledge_check: '检查本地知识库',
+		fast_knowledge_answered: '本地知识库已回答',
+		fast_knowledge_miss: '本地知识库未直接命中',
+		knowledge_context_answer: '使用知识库上下文',
 		uploaded_file_context_answer: '使用上传文件上下文',
-		openclaw_connected: 'Connected to OpenClaw Gateway',
-		openclaw_connection_error: 'OpenClaw connection error',
-		openclaw_connection_closed: 'OpenClaw connection closed',
-		openclaw_reconnecting: event.message || 'Reconnecting...',
-		openclaw_session_ready: 'OpenClaw session ready',
+		model_queue_waiting: '模型请求排队中',
+		model_queue_started: '开始调用模型',
+		model_queue_completed: '模型请求完成',
+		openclaw_connected: '已连接 OpenClaw 网关',
+		openclaw_connection_error: 'OpenClaw 连接异常',
+		openclaw_connection_closed: 'OpenClaw 连接已关闭',
+		openclaw_reconnecting: toChineseVisibleText(event.message || '正在重新连接...'),
+		openclaw_session_ready: 'OpenClaw 会话已就绪',
 		memory_started: '加载记忆',
 		memory_loaded: '完成记忆加载',
 		planning_started: '开始规划',
@@ -2806,11 +2977,17 @@ function getStreamEventTitle(event = {}) {
 }
 
 function formatStreamEventType(type = '') {
-	return String(type || 'status')
-		.split(/[_-]+/)
-		.filter(Boolean)
-		.map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-		.join(' ');
+	const labels = {
+		status: '处理状态',
+		execution_step_started: '开始执行步骤',
+		execution_step_completed: '完成执行步骤',
+		execution_step_failed: '执行步骤失败',
+		execution_step_blocked: '执行步骤受阻',
+		assistant_delta: '生成回答',
+		assistant_thinking_delta: '生成思考过程',
+		assistant_message: '接收回答内容'
+	};
+	return labels[String(type || 'status')] || '处理状态';
 }
 
 function mapStreamEventStatus(type = '') {
@@ -2829,6 +3006,9 @@ function mapStreamEventStatus(type = '') {
 		fast_knowledge_miss: 'completed',
 		knowledge_context_answer: 'running',
 		uploaded_file_context_answer: 'running',
+		model_queue_waiting: 'running',
+		model_queue_started: 'running',
+		model_queue_completed: 'completed',
 		openclaw_connected: 'completed',
 		openclaw_connection_error: 'failed',
 		openclaw_connection_closed: 'warning',
@@ -2973,8 +3153,8 @@ function hasGraphKnowledge(message) {
 function getGraphModeLabel(mode = '') {
 	const labels = {
 		auto: '自动',
-		local: 'Local Search',
-		global: 'Global Search',
+		local: '本地检索',
+		global: '全局检索',
 		not_used: '未触发检索'
 	};
 	const normalized = String(mode || '').toLowerCase();
@@ -2985,7 +3165,7 @@ function getGraphModeLabel(mode = '') {
 		uploaded_file_compare: '上传文件对比',
 		knowledge_qa: '知识库问答'
 	};
-	return extraLabels[normalized] || labels[normalized] || mode;
+	return extraLabels[normalized] || labels[normalized] || toChineseVisibleText(mode);
 }
 
 function getConversationIntentLabel(intent = '') {
@@ -3094,8 +3274,8 @@ function buildCodexNarrativeItem(step = {}, index = 0, message = {}) {
 	const id = String(step.id || '').toLowerCase();
 	const toolName = String(step.toolName || '').toLowerCase();
 	const eventKey = `${id} ${type} ${toolName}`;
-	const detail = String(step.detail || '').trim();
-	const title = String(step.title || '').trim();
+	const detail = toChineseVisibleText(String(step.detail || '').trim());
+	const title = toChineseVisibleText(String(step.title || '').trim());
 	const route = detail.split(':')[0] || '';
 	const routeLabel = getGraphModeLabel(route);
 
@@ -3163,7 +3343,7 @@ function buildCodexNarrativeItem(step = {}, index = 0, message = {}) {
 		return makeCodexTextItem(step.id || `context-${index}`, '我找到了相关片段，正在让模型结合知识库上下文生成答案。');
 	}
 	if (type.includes('openclaw_reconnecting')) {
-		return makeCodexTextItem(step.id || `reconnect-${index}`, detail || 'Reconnecting...');
+		return makeCodexTextItem(step.id || `reconnect-${index}`, detail || '正在重新连接...');
 	}
 	if (type.includes('openclaw_connected')) {
 		return makeCodexTextItem(step.id || `connected-${index}`, '已经连接到 OpenClaw Gateway。');
@@ -3199,8 +3379,8 @@ function buildCodexToolItem(step = {}, index = 0) {
 }
 
 function compactToolCommand(step = {}) {
-	const toolName = String(step.toolName || '').trim();
-	const detail = String(step.detail || '').replace(/\s+/g, ' ').trim();
+	const toolName = toChineseVisibleText(String(step.toolName || '').trim());
+	const detail = toChineseVisibleText(String(step.detail || '').replace(/\s+/g, ' ').trim());
 	if (!detail) return toolName;
 	const clipped = detail.length > 88 ? `${detail.slice(0, 88)}...` : detail;
 	return `${toolName} ${clipped}`.trim();
@@ -3231,7 +3411,7 @@ function getAssistantRunLabel(message) {
 	}
 	const summary = String(message?.executionTrace?.summary || '').trim();
 	if (summary) {
-		return summary;
+		return toChineseVisibleText(summary);
 	}
 	return '已完成处理';
 }
@@ -3262,11 +3442,11 @@ function formatDuration(durationMs = 0) {
 }
 
 function formatTimelineStepTitle(step = {}, index = 0) {
-	return step?.title || step?.toolName || `步骤 ${index + 1}`;
+	return toChineseVisibleText(step?.title || step?.toolName || `步骤 ${index + 1}`);
 }
 
 function formatTimelineStepDetail(step = {}) {
-	return step?.detail || step?.reason || step?.error || '';
+	return toChineseVisibleText(step?.detail || step?.reason || step?.error || '');
 }
 
 function shouldShowTimelineStatus(step = {}) {
@@ -3276,7 +3456,7 @@ function shouldShowTimelineStatus(step = {}) {
 
 function getTimelineStepMeta(step = {}) {
 	const meta = [];
-	if (step?.toolName) meta.push(`工具：${formatToolName(step.toolName)}`);
+	if (step?.toolName) meta.push(`工具：${toChineseVisibleText(formatToolName(step.toolName))}`);
 	if (Number.isFinite(Number(step?.durationMs)) && Number(step.durationMs) > 0) meta.push(`耗时：${formatDuration(step.durationMs)}`);
 	if (Number.isFinite(Number(step?.citationCount)) && Number(step.citationCount) > 0) meta.push(`引用：${step.citationCount}`);
 	if (step?.fileName) meta.push(`文件：${step.fileName}`);
@@ -3337,7 +3517,7 @@ function getExecutionFlowHeadline(message) {
 
 	const selectedTool = message?.openClaw?.selectedTool;
 	if (selectedTool) {
-		return `已通过 ${formatToolName(selectedTool)} 完成本轮处理`;
+		return `已通过 ${toChineseVisibleText(formatToolName(selectedTool))} 完成本轮处理`;
 	}
 	if (message?.conversationUnderstanding?.intent) {
 		return `已识别会话对象：${getConversationIntentLabel(message.conversationUnderstanding.intent)}`;
@@ -3360,7 +3540,7 @@ function getProcessOverviewChips(message) {
 	const targetFileCount = Array.isArray(understanding?.targetFiles) ? understanding.targetFiles.length : 0;
 	const uploadedDocumentCount = Number(understanding?.state?.uploadedDocumentCount);
 
-	if (selectedTool) chips.push(`工具：${formatToolName(selectedTool)}`);
+	if (selectedTool) chips.push(`工具：${toChineseVisibleText(formatToolName(selectedTool))}`);
 	if (message?.queryMode) chips.push(`检索：${getGraphModeLabel(message.queryMode)}`);
 	if (strategy) chips.push(`策略：${strategy}`);
 	if (Number.isFinite(confidence) && confidence > 0) chips.push(`置信度：${Math.round(confidence * 100)}%`);
@@ -3488,7 +3668,7 @@ function getProcessStepDetail(step = {}) {
 
 function getProcessStepMeta(step = {}) {
 	const meta = [];
-	if (step.toolName) meta.push(`工具：${formatToolName(step.toolName)}`);
+	if (step.toolName) meta.push(`工具：${toChineseVisibleText(formatToolName(step.toolName))}`);
 	if (step.fileName) meta.push(`文件：${step.fileName}`);
 	if (step.dependsOn?.length) meta.push(`依赖：${step.dependsOn.join(' -> ')}`);
 	if (Number.isFinite(Number(step.citationCount)) && Number(step.citationCount) > 0) meta.push(`引用：${step.citationCount}`);
@@ -3644,7 +3824,7 @@ function getPendingExecutionDetail({ chatMode = 'chat', hasFiles = false, queryM
 function formatRepairStrategy(strategy = '') {
 	const labels = {
 		retry_same_tool: '重试当前工具',
-		retry_global_search: '切换到 Global Search 重试',
+		retry_global_search: '切换到全局检索重试',
 		replan_to_public_collect: '重规划到公开资料补采',
 		compare_replan_to_public_collect: '比对失败后转公开资料补采',
 		fallback_direct_chat: '回退到直接对话',
@@ -3670,15 +3850,17 @@ function hasFileReadSummary(message) {
 
 function getFileReadSummaryItems(message) {
 	const files = Array.isArray(message?.fileAnalysis?.files) ? message.fileAnalysis.files : [];
-	return files.filter((file) => file?.readerSkill || file?.parserStrategy || Number.isFinite(Number(file?.textQualityScore)));
+	return files.filter((file) => file?.readerSkill || file?.parserStrategy || file?.visionStatus || Number.isFinite(Number(file?.textQualityScore)));
 }
 
 function formatFileReadSummary(file = {}) {
 	const parts = [];
 	if (file.readerSkill) parts.push(`技能：${formatToolName(file.readerSkill)}`);
 	if (file.parserStrategy) parts.push(`策略：${file.parserStrategy}`);
+	if (file.visionStatus) parts.push(`视觉：${file.visionStatus}`);
 	if (file.businessTypeLabel || file.businessType) parts.push(`类型：${file.businessTypeLabel || file.businessType}`);
 	if (Number.isFinite(Number(file.textQualityScore)) && Number(file.textQualityScore) > 0) parts.push(`质量：${Math.round(Number(file.textQualityScore) * 100)}%`);
+	if (file.visionWarning) parts.push(`提示：${file.visionWarning}`);
 	if (file.readerFallbackUsed) parts.push('已回退');
 	return parts.join(' · ') || '已完成读取';
 }
@@ -3859,11 +4041,12 @@ function formatToolName(name = '') {
 		pdf_document_reader_skill: 'PDF 读取技能',
 		text_document_reader_skill: '文本读取技能',
 		image_ocr_reader_skill: 'OCR 读取技能',
+		image_vision_reader_skill: '图片视觉直读',
 		archive_reader_skill: '压缩包读取技能',
 		generic_binary_reader_skill: '通用读取技能',
 		structured_extract: '结构化提取'
 	};
-	return labels[name] || name || '工具';
+	return labels[name] || toChineseVisibleText(name) || '工具';
 }
 
 function formatToolCall(toolCall = {}) {

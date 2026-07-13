@@ -321,7 +321,7 @@
 			<div class="portal-home__bottom-alerts">
 				<div class="portal-home__bottom-alert-track">
 					<div
-						v-for="item in reminders"
+						v-for="item in runtimeReminders"
 						:key="`${item.time}-${item.source}-${item.text}`"
 						class="portal-home__bottom-alert"
 					>
@@ -350,6 +350,7 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { useChatWebSocket } from '../../composables/useChatWebSocket';
 
 const props = defineProps({
 	active: Boolean,
@@ -377,6 +378,7 @@ const props = defineProps({
 
 const emit = defineEmits(['enter-module']);
 const statsExpanded = ref(false);
+const { connectionStatus, reportReminders } = useChatWebSocket();
 const statsToggleLabel = computed(() => (statsExpanded.value ? '收起' : '展开'));
 
 // 计算属性：从接口数据映射到UI需要的数据格式
@@ -667,6 +669,25 @@ const entries = [
 ];
 
 const lineChartSegments = computed(() => buildLineSegments(lineChartPoints.value));
+const runtimeReminders = computed(() => {
+	const liveItems = reportReminders.value.slice(0, 6).map((item) => ({
+		time: formatReminderTime(item.CreateTime),
+		source: item.SenderRealName || item.SenderName || '日报提醒',
+		text: item.Message || '您有新的日报提醒，请及时处理。',
+	}));
+
+	if (liveItems.length) {
+		return liveItems;
+	}
+
+	const placeholderText = connectionStatus.value === 'connected'
+		? '当前暂无日报未提交提醒'
+		: ['connecting', 'reconnecting'].includes(connectionStatus.value)
+			? '日报提醒通道连接中...'
+			: '日报提醒通道暂未连接';
+
+	return [{ time: '--', source: '系统提醒', text: placeholderText }];
+});
 
 // 提醒消息
 const reminders = [
@@ -715,6 +736,11 @@ const weatherInfo = ref({
 let nowTimer = null;
 
 const padNumber = (value) => String(value).padStart(2, '0');
+const formatReminderTime = (value) => {
+	const date = new Date(value || '');
+	if (Number.isNaN(date.getTime())) return '--';
+	return `${padNumber(date.getHours())}:${padNumber(date.getMinutes())}`;
+};
 const currentTimeText = computed(() => {
 	const date = now.value;
 	return `${padNumber(date.getHours())}:${padNumber(date.getMinutes())}:${padNumber(date.getSeconds())}`;

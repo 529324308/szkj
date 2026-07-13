@@ -49,10 +49,75 @@
 						<p class="page-header__desc">{{ currentSection.description }}</p>
 					</div>
 					<div class="page-header__actions">
-						<el-tag type="success" effect="dark">模拟数据</el-tag>
-						<el-tag effect="plain">单文件实现</el-tag>
+						<el-tag :type="reportReminderSocketTagType" effect="plain">{{ reportReminderSocketLabel }}</el-tag>
+						<el-tag
+							v-if="messageCount"
+							type="warning"
+							effect="light"
+							class="message-reminder-tag"
+							@click="openMessageDrawer"
+						>
+							{{ messageCount }} 条消息提醒
+						</el-tag>
 					</div>
 				</header>
+
+				<el-drawer
+					v-model="messageDrawerVisible"
+					direction="rtl"
+					size="420px"
+					class="message-drawer"
+				>
+					<template #header>
+						<div class="message-drawer__header">
+							<span>消息提醒</span>
+							<el-button
+								v-if="visibleMessageList.length"
+								type="danger"
+								link
+								@click="handleClearMessages"
+							>
+								清除所有通知
+							</el-button>
+						</div>
+					</template>
+					<el-scrollbar class="message-drawer__scroll">
+						<div v-if="visibleMessageList.length" class="message-list">
+							<div
+								v-for="item in visibleMessageList"
+								:key="item.__key || item.Id"
+								class="message-list__item"
+							>
+								<el-button
+									class="message-list__delete"
+									:icon="Close"
+									circle
+									text
+									aria-label="删除通知"
+									@click.stop="handleDeleteMessage(item)"
+								/>
+								<div class="message-list__row">
+									<div :class="['message-list__icon', `message-list__icon--${getMessageCategory(item)}`]">
+										<el-icon><component :is="getMessageIcon(item)" /></el-icon>
+									</div>
+									<div class="message-list__body">
+										<div class="message-list__item-head">
+											<div class="message-list__title">
+												<span>{{ getMessageSender(item) }}</span>
+												<el-tag size="small" :type="getMessageTagType(item)" effect="plain">
+													{{ getMessageTypeLabel(item) }}
+												</el-tag>
+											</div>
+											<span class="message-list__time">{{ formatMessageTime(item.CreateTime) }}</span>
+										</div>
+										<div class="message-list__content">{{ item.Message || '您有一条新的消息提醒。' }}</div>
+									</div>
+								</div>
+							</div>
+						</div>
+						<el-empty v-else description="暂无消息提醒" />
+					</el-scrollbar>
+				</el-drawer>
 
 				<el-scrollbar class="page-scroll">
 					<div :class="['page-content', { 'page-content--fill': ['employees', 'projects', 'reports', 'settings'].includes(activeSection) }]">
@@ -1236,6 +1301,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import * as echarts from 'echarts';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { getPersonalCenterFocusState, updatePersonalCenterFocusState } from '../../api/personalCenterFocus';
+import { useChatWebSocket } from '../../composables/useChatWebSocket';
 import {
 	getCurrentUser,
 	getOptions,
@@ -1268,6 +1334,8 @@ import {
 import focusPinOnIcon from '../../assets/图钉_on.png';
 import focusPinOffIcon from '../../assets/图钉_off.png';
 import {
+	Bell,
+	Close,
 	DataAnalysis,
 	Download,
 	Document,
@@ -1375,6 +1443,33 @@ const overviewRealtimeStats = reactive({
 	todaySubmitted: null,
 	expectedCount: null,
 });
+const {
+	connectionStatus: reportReminderSocketStatus,
+	lastRefreshSignal,
+	messageList,
+	removeChatMessage,
+	clearChatMessages,
+} = useChatWebSocket();
+const visibleMessageList = computed(() => (
+	messageList.value
+		.filter((item) => item?.Type && !['Pong', 'Ping'].includes(item.Type))
+		.slice()
+		.sort((a, b) => getSocketMessageTime(b) - getSocketMessageTime(a))
+));
+const messageCount = computed(() => visibleMessageList.value.length);
+const reportReminderSocketLabel = computed(() => {
+	if (reportReminderSocketStatus.value === 'connected') return '提醒通道已连接';
+	if (['connecting', 'reconnecting'].includes(reportReminderSocketStatus.value)) return '提醒通道连接中';
+	if (reportReminderSocketStatus.value === 'error') return '提醒通道异常';
+	return '提醒通道未连接';
+});
+const reportReminderSocketTagType = computed(() => {
+	if (reportReminderSocketStatus.value === 'connected') return 'success';
+	if (['connecting', 'reconnecting'].includes(reportReminderSocketStatus.value)) return 'warning';
+	if (reportReminderSocketStatus.value === 'error') return 'danger';
+	return 'info';
+});
+const messageDrawerVisible = ref(false);
 
 // 标记是否已加载过API数据
 const apiDataLoaded = reactive({
@@ -1505,7 +1600,7 @@ const sectionDefinitions = [
 	{
 		key: 'overview',
 		label: '首页概览',
-		description: '展示当前测试角色下的统计总览、项目状态、日报情况和快捷操作入口。',
+		description: '展示统计总览、项目状态、日报情况和快捷操作入口。',
 		placeholder: '首页概览已完成，后续节点继续补齐二级业务页。',
 		icon: DataAnalysis,
 		roles: [ROLE_ENUM.ADMIN, ROLE_ENUM.MANAGER, ROLE_ENUM.EMPLOYEE],
@@ -2466,6 +2561,82 @@ const employeeStatusTagTypeMap = {
 	试用: 'warning',
 	离职: 'info',
 };
+const socketMessageTypeLabelMap = {
+	report_submit_reminder: '日报提醒',
+	report_submitted: '日报提交',
+	report_commented: '日报批注',
+	project_assigned: '项目下发',
+	project_updated: '项目更新',
+	project_progress_updated: '进度更新',
+	project_due_soon: '项目到期',
+	project_approved: '审核通过',
+	project_rejected: '审核驳回',
+	Message: '消息',
+};
+const socketMessageTagTypeMap = {
+	report_submit_reminder: 'warning',
+	project_due_soon: 'danger',
+	project_rejected: 'danger',
+	project_assigned: 'primary',
+	project_progress_updated: 'primary',
+	project_updated: 'primary',
+	report_submitted: 'success',
+	report_commented: 'success',
+	project_approved: 'success',
+};
+
+function openMessageDrawer() {
+	messageDrawerVisible.value = true;
+}
+
+function getSocketMessageTime(item) {
+	const parsed = Date.parse(item?.CreateTime || '');
+	return Number.isFinite(parsed) ? parsed : Number(item?.__receivedAt || 0);
+}
+
+function getMessageSender(item) {
+	return item?.SenderRealName || item?.SenderName || '系统提醒';
+}
+
+function getMessageTypeLabel(item) {
+	return socketMessageTypeLabelMap[item?.Type] || item?.Type || '消息';
+}
+
+function getMessageTagType(item) {
+	return socketMessageTagTypeMap[item?.Type] || 'info';
+}
+
+function getMessageCategory(item) {
+	const type = item?.Type || '';
+	const bizType = item?.BizType || '';
+	if (type.startsWith('employee_') || bizType === 'employee') return 'employee';
+	if (type.startsWith('project_') || bizType === 'project' || bizType === 'projectProgress') return 'project';
+	if (type.startsWith('report_') || bizType === 'report') return 'report';
+	return 'system';
+}
+
+function getMessageIcon(item) {
+	const category = getMessageCategory(item);
+	if (category === 'employee') return User;
+	if (category === 'project') return FolderOpened;
+	if (category === 'report') return Document;
+	if (category === 'system') return SetUp;
+	return Bell;
+}
+
+function formatMessageTime(dateString) {
+	const date = new Date(dateString || '');
+	if (Number.isNaN(date.getTime())) return '--';
+	return formatDateTime(date);
+}
+
+function handleDeleteMessage(item) {
+	removeChatMessage(item?.__key);
+}
+
+function handleClearMessages() {
+	clearChatMessages();
+}
 
 watch(currentRole, (nextRole) => {
 	writePersistedRole(nextRole);
@@ -2588,6 +2759,35 @@ watch(
 		loadOverviewRealtimeStats();
 	}
 }
+);
+
+watch(
+	() => lastRefreshSignal.value?.eventId || '',
+	async (eventId) => {
+		if (!eventId || !props.active) return;
+
+		const signal = lastRefreshSignal.value;
+		const targets = new Set((signal?.refreshHints || []).map((item) => item.target).filter(Boolean));
+		if (!signal?.needRefresh && targets.size === 0) return;
+		const shouldRefreshAll = Boolean(signal?.needRefresh) || targets.size === 0;
+
+		if ((shouldRefreshAll || targets.has('overview')) && activeSection.value === 'overview') {
+			await loadOverviewData({ range: overviewRange.value, trendMode: projectTrendMode.value });
+			await loadOverviewRealtimeStats();
+		}
+		if ((shouldRefreshAll || targets.has('projects')) && activeSection.value === 'projects') {
+			await loadProjects();
+		}
+		if ((shouldRefreshAll || targets.has('projectDetail')) && projectDetailVisible.value && activeProjectId.value) {
+			await loadProjectDetail(activeProjectId.value);
+		}
+		if ((shouldRefreshAll || targets.has('reports')) && activeSection.value === 'reports') {
+			await loadReports();
+		}
+		if ((shouldRefreshAll || targets.has('reportDetail')) && reportDetailVisible.value && activeReportId.value) {
+			await loadReportDetail(activeReportId.value);
+		}
+	},
 );
 
 // 监听首页概览参数变化时重新加载数据
@@ -5646,6 +5846,144 @@ function formatShortDate(dateString) {
 	display: flex;
 	flex-wrap: wrap;
 	gap: 10px;
+}
+
+.message-reminder-tag {
+	cursor: pointer;
+	user-select: none;
+}
+
+.message-reminder-tag:hover {
+	filter: brightness(0.98);
+}
+
+.message-drawer :deep(.el-drawer__body) {
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+	padding: 0 20px 20px;
+}
+
+.message-drawer__header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	width: 100%;
+	gap: 16px;
+	font-weight: 700;
+	color: #0f172a;
+}
+
+.message-drawer__scroll {
+	flex: 1;
+	min-height: 0;
+}
+
+.message-list {
+	display: grid;
+	gap: 12px;
+}
+
+.message-list__item {
+	position: relative;
+	padding: 14px 16px 14px 14px;
+	border-radius: 12px;
+	border: 1px solid #e5edf4;
+	background: #ffffff;
+}
+
+.message-list__delete {
+	position: absolute;
+	top: 6px;
+	left: 6px;
+	z-index: 1;
+	opacity: 0;
+	transform: scale(0.92);
+	transition: opacity 0.16s ease, transform 0.16s ease;
+	color: #ef4444;
+	background: #ffffff;
+	box-shadow: 0 8px 18px rgba(15, 23, 42, 0.12);
+}
+
+.message-list__item:hover .message-list__delete,
+.message-list__delete:focus-visible {
+	opacity: 1;
+	transform: scale(1);
+}
+
+.message-list__row {
+	display: flex;
+	align-items: flex-start;
+	gap: 12px;
+}
+
+.message-list__icon {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex: none;
+	width: 36px;
+	height: 36px;
+	border-radius: 10px;
+	font-size: 18px;
+	background: #eff6ff;
+	color: #2563eb;
+}
+
+.message-list__icon--project {
+	background: #ecfeff;
+	color: #0891b2;
+}
+
+.message-list__icon--report {
+	background: #f0fdf4;
+	color: #16a34a;
+}
+
+.message-list__icon--employee {
+	background: #fff7ed;
+	color: #ea580c;
+}
+
+.message-list__icon--system {
+	background: #f8fafc;
+	color: #64748b;
+}
+
+.message-list__body {
+	min-width: 0;
+	flex: 1;
+}
+
+.message-list__item-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+}
+
+.message-list__title {
+	display: inline-flex;
+	align-items: center;
+	min-width: 0;
+	gap: 8px;
+	font-size: 14px;
+	font-weight: 700;
+	color: #0f172a;
+}
+
+.message-list__time {
+	flex: none;
+	font-size: 12px;
+	color: #64748b;
+}
+
+.message-list__content {
+	margin-top: 10px;
+	font-size: 14px;
+	line-height: 1.7;
+	color: #334155;
+	word-break: break-word;
 }
 
 .page-scroll {
